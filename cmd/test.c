@@ -26,6 +26,8 @@
 #define OP_INT_GT	14
 #define OP_INT_GE	15
 #define OP_FILE_EXISTS	16
+#define OP_STR_EQ_CASE	17
+
 
 const struct {
 	int arg;
@@ -49,6 +51,7 @@ const struct {
 	{0, "-z", OP_STR_EMPTY, 2},
 	{0, "-n", OP_STR_NEMPTY, 2},
 	{0, "-e", OP_FILE_EXISTS, 4},
+	{1, "==", OP_STR_EQ_CASE, 3},
 };
 
 static int do_test(struct cmd_tbl *cmdtp, int flag, int argc,
@@ -140,6 +143,9 @@ static int do_test(struct cmd_tbl *cmdtp, int flag, int argc,
 			break;
 		case OP_FILE_EXISTS:
 			expr = file_exists(ap[1], ap[2], ap[3], FS_TYPE_ANY);
+			break;
+		case OP_STR_EQ_CASE:
+			expr = strcasecmp(ap[0], ap[2]) == 0;
 			break;
 		}
 
