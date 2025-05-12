@@ -29,6 +29,7 @@
 #include <asm/mach-imx/iomux-v3.h>
 #include <asm/mach-imx/sata.h>
 #include <asm/mach-imx/video.h>
+#include <asm/sections.h>
 #include <cpu.h>
 #include <dm/platform_data/serial_mxc.h>
 #include <fsl_esdhc_imx.h>
@@ -73,7 +74,7 @@ DECLARE_GLOBAL_DATA_PTR;
 int dram_init(void)
 {
 	/* use the DDR controllers configured size */
-	gd->ram_size = get_ram_size((void *)CONFIG_SYS_SDRAM_BASE,
+	gd->ram_size = get_ram_size((void *)CFG_SYS_SDRAM_BASE,
 				    (ulong)imx_ddr_size());
 
 	return 0;
@@ -290,7 +291,7 @@ int board_ehci_hcd_init(int port)
 
 #if defined(CONFIG_FSL_ESDHC_IMX) && defined(CONFIG_SPL_BUILD)
 /* use the following sequence: eMMC, MMC */
-struct fsl_esdhc_cfg usdhc_cfg[CONFIG_SYS_FSL_USDHC_NUM] = {
+struct fsl_esdhc_cfg usdhc_cfg[CFG_SYS_FSL_USDHC_NUM] = {
 	{USDHC3_BASE_ADDR},
 	{USDHC1_BASE_ADDR},
 };
@@ -767,8 +768,7 @@ MX6_MMDC_P1_MPRDDQBY3DL, 0x33333333,
 /*
  * MDMISC	mirroring	interleaved (row/bank/col)
  */
-/* TODO: check what the RALAT field does */
-MX6_MMDC_P0_MDMISC, 0x00081740,
+MX6_MMDC_P0_MDMISC, 0x000b17c0,
 
 /*
  * MDSCR	con_req
@@ -900,8 +900,7 @@ MX6_MMDC_P1_MPRDDQBY3DL, 0x33333333,
 /*
  * MDMISC	mirroring	interleaved (row/bank/col)
  */
-/* TODO: check what the RALAT field does */
-MX6_MMDC_P0_MDMISC, 0x00081740,
+MX6_MMDC_P0_MDMISC, 0x000b17c0,
 
 /*
  * MDSCR	con_req
@@ -980,13 +979,17 @@ static void ccgr_init(void)
 /*
  * Setup CCM_CCOSR register as follows:
  *
- * cko1_en  = 1	   --> CKO1 enabled
- * cko1_div = 111  --> divide by 8
- * cko1_sel = 1011 --> ahb_clk_root
+ * clko2_en  = 1     --> CKO2 enabled
+ * clko2_div = 000   --> divide by 1
+ * clko2_sel = 01110 --> osc_clk (24MHz)
  *
- * This sets CKO1 at ahb_clk_root/8 = 132/8 = 16.5 MHz
+ * clk_out_sel = 1   --> Output CKO2 to CKO1
+ *
+ * This sets both CLKO2/CLKO1 output to 24MHz,
+ * CLKO1 configuration not relevant because of clk_out_sel
+ * (CLKO1 set to default)
  */
-	writel(0x000000FB, &ccm->ccosr);
+	writel(0x010E0101, &ccm->ccosr);
 }
 
 static void ddr_init(int *table, int size)

@@ -4,7 +4,7 @@
  *
  * (C) Copyright 2022, Xilinx, Inc.
  *
- * Michal Simek <michal.simek@xilinx.com>
+ * Michal Simek <michal.simek@amd.com>
  */
 
 #include <dt-bindings/net/ti-dp83867.h>
@@ -23,12 +23,13 @@
 	};
 
 	chosen {
-		bootargs = "console=ttyAMA0 earlycon=pl011,mmio32,0xFF000000,115200n8 clk_ignore_unused";
+		bootargs = "console=ttyAMA0 earlycon=pl011,mmio32,0xFF000000,115200n8";
 		stdout-path = "serial0:115200";
 	};
 
 	aliases {
 		serial0 = &serial0;
+		serial2 = &dcc;
 		i2c0 = &i2c0;
 		i2c1 = &i2c1;
 		mmc0 = &sdhci1;
@@ -54,12 +55,10 @@
 
 &ospi { /* PMC MIO0 - 12, U297 MT35XU02G */
 	status = "okay";
-	compatible = "xlnx,versal-ospi-1.0", "cadence,qspi", "cdns,qspi-nor";
 	bus-num = <2>;
 	num-cs = <1>;
 	#address-cells = <1>;
 	#size-cells = <0>;
-	reset-gpios = <&gpio1 12 GPIO_ACTIVE_HIGH>;
 
 	flash@0 {
 		compatible = "mt35xu02g", "micron,m25p80", "jedec,spi-nor";
@@ -74,6 +73,8 @@
 		spi-tx-bus-width = <8>;
 		spi-rx-bus-width = <8>;
 		spi-max-frequency = <20000000>;
+		no-wp;
+		reset-gpios = <&gpio1 12 GPIO_ACTIVE_LOW>;
 		partition@0 {
 			label = "spi0-flash0";
 			reg = <0 0x8000000>;
@@ -83,8 +84,6 @@
 
 &usb0 { /* PMC_MIO13_500 - PMC_MIO25 USB 2.0 */
 	status = "okay";
-	xlnx,usb-polarity = <0>;
-	xlnx,usb-reset-mode = <0>;
 };
 
 &dwc3_0 { /* USB 2.0 host */
@@ -108,12 +107,10 @@
 
 &i2c0 { /* PMC_MIO46/47 */
 	status = "okay";
-	clock-frequency = <400000>;
 };
 
 &i2c1 { /* PMC_MIO44/45 */
 	status = "okay";
-	clock-frequency = <400000>;
 };
 
 &dcc {
@@ -156,4 +153,36 @@
 			reset-gpios = <&gpio1 48 GPIO_ACTIVE_LOW>;
 		};
 	};
+};
+
+&lpd_dma_chan0 {
+	status = "okay";
+};
+
+&lpd_dma_chan1 {
+	status = "okay";
+};
+
+&lpd_dma_chan2 {
+	status = "okay";
+};
+
+&lpd_dma_chan3 {
+	status = "okay";
+};
+
+&lpd_dma_chan4 {
+	status = "okay";
+};
+
+&lpd_dma_chan5 {
+	status = "okay";
+};
+
+&lpd_dma_chan6 {
+	status = "okay";
+};
+
+&lpd_dma_chan7 {
+	status = "okay";
 };

@@ -43,6 +43,7 @@
 #include <i2c.h>
 #include <log.h>
 #include <linux/delay.h>
+#include <linux/printk.h>
 
 #include <asm/io.h>
 #include <asm/omap_i2c.h>
@@ -1015,7 +1016,7 @@ static int omap_i2c_probe_chip(struct udevice *bus, uint chip_addr,
 	struct omap_i2c *priv = dev_get_priv(bus);
 
 	return __omap24_i2c_probe(priv->regs, priv->ip_rev, priv->waitdelay,
-				  chip_addr);
+				  chip_addr) ? -EREMOTEIO : 0;
 }
 
 static int omap_i2c_probe(struct udevice *bus)

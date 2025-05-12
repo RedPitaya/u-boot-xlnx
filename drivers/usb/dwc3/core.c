@@ -2,7 +2,7 @@
 /**
  * core.c - DesignWare USB3 DRD Controller Core file
  *
- * Copyright (C) 2015 Texas Instruments Incorporated - http://www.ti.com
+ * Copyright (C) 2015 Texas Instruments Incorporated - https://www.ti.com
  *
  * Authors: Felipe Balbi <balbi@ti.com>,
  *	    Sebastian Andrzej Siewior <bigeasy@linutronix.de>
@@ -14,6 +14,7 @@
  */
 
 #include <common.h>
+#include <clk.h>
 #include <cpu_func.h>
 #include <malloc.h>
 #include <dwc3-uboot.h>
@@ -28,12 +29,16 @@
 #include <generic-phy.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
+#include <linux/bitfield.h>
+#include <linux/math64.h>
 
 #include "core.h"
 #include "gadget.h"
 #include "io.h"
 
 #include "linux-compat.h"
+
+#define NSEC_PER_SEC	1000000000L
 
 static LIST_HEAD(dwc3_list);
 /* -------------------------------------------------------------------------- */
@@ -55,42 +60,30 @@ static void dwc3_set_mode(struct dwc3 *dwc, u32 mode)
 static int dwc3_core_soft_reset(struct dwc3 *dwc)
 {
 	u32		reg;
+	int		retries = 1000;
 
-	/* Before Resetting PHY, put Core in Reset */
-	reg = dwc3_readl(dwc->regs, DWC3_GCTL);
-	reg |= DWC3_GCTL_CORESOFTRESET;
-	dwc3_writel(dwc->regs, DWC3_GCTL, reg);
+	/*
+	 * We're resetting only the device side because, if we're in host mode,
+	 * XHCI driver will reset the host block. If dwc3 was configured for
+	 * host-only mode, then we can return early.
+	 */
+	if (dwc->dr_mode == USB_DR_MODE_HOST)
+		return 0;
 
-	/* Assert USB3 PHY reset */
-	reg = dwc3_readl(dwc->regs, DWC3_GUSB3PIPECTL(0));
-	reg |= DWC3_GUSB3PIPECTL_PHYSOFTRST;
-	dwc3_writel(dwc->regs, DWC3_GUSB3PIPECTL(0), reg);
+	reg = dwc3_readl(dwc->regs, DWC3_DCTL);
+	reg |= DWC3_DCTL_CSFTRST;
+	reg &= ~DWC3_DCTL_RUN_STOP;
+	dwc3_gadget_dctl_write_safe(dwc, reg);
 
-	/* Assert USB2 PHY reset */
-	reg = dwc3_readl(dwc->regs, DWC3_GUSB2PHYCFG(0));
-	reg |= DWC3_GUSB2PHYCFG_PHYSOFTRST;
-	dwc3_writel(dwc->regs, DWC3_GUSB2PHYCFG(0), reg);
+	do {
+		reg = dwc3_readl(dwc->regs, DWC3_DCTL);
+		if (!(reg & DWC3_DCTL_CSFTRST))
+			return 0;
 
-	mdelay(100);
+		udelay(1);
+	} while (--retries);
 
-	/* Clear USB3 PHY reset */
-	reg = dwc3_readl(dwc->regs, DWC3_GUSB3PIPECTL(0));
-	reg &= ~DWC3_GUSB3PIPECTL_PHYSOFTRST;
-	dwc3_writel(dwc->regs, DWC3_GUSB3PIPECTL(0), reg);
-
-	/* Clear USB2 PHY reset */
-	reg = dwc3_readl(dwc->regs, DWC3_GUSB2PHYCFG(0));
-	reg &= ~DWC3_GUSB2PHYCFG_PHYSOFTRST;
-	dwc3_writel(dwc->regs, DWC3_GUSB2PHYCFG(0), reg);
-
-	mdelay(100);
-
-	/* After PHYs are stable we can take Core out of reset state */
-	reg = dwc3_readl(dwc->regs, DWC3_GCTL);
-	reg &= ~DWC3_GCTL_CORESOFTRESET;
-	dwc3_writel(dwc->regs, DWC3_GCTL, reg);
-
-	return 0;
+	return -ETIMEDOUT;
 }
 
 /*
@@ -109,12 +102,75 @@ static void dwc3_frame_length_adjustment(struct dwc3 *dwc, u32 fladj)
 		return;
 
 	reg = dwc3_readl(dwc->regs, DWC3_GFLADJ);
-
-	if (dwc->refclk_fladj)
-		reg &= ~GFLADJ_REFCLK_FLADJ;
-
 	reg &= ~DWC3_GFLADJ_30MHZ_MASK;
 	reg |= DWC3_GFLADJ_30MHZ_SDBND_SEL | fladj;
+	dwc3_writel(dwc->regs, DWC3_GFLADJ, reg);
+}
+
+/**
+ * dwc3_ref_clk_period - Reference clock period configuration
+ *		Default reference clock period depends on hardware
+ *		configuration. For systems with reference clock that differs
+ *		from the default, this will set clock period in DWC3_GUCTL
+ *		register.
+ * @dwc: Pointer to our controller context structure
+ * @ref_clk_per: reference clock period in ns
+ */
+static void dwc3_ref_clk_period(struct dwc3 *dwc)
+{
+	unsigned long period;
+	unsigned long fladj;
+	unsigned long decr;
+	unsigned long rate;
+	u32 reg;
+
+	if (dwc->ref_clk) {
+		rate = clk_get_rate(dwc->ref_clk);
+		if (!rate)
+			return;
+		period = NSEC_PER_SEC / rate;
+	} else {
+		return;
+	}
+
+	reg = dwc3_readl(dwc->regs, DWC3_GUCTL);
+	reg &= ~DWC3_GUCTL_REFCLKPER_MASK;
+	reg |=  FIELD_PREP(DWC3_GUCTL_REFCLKPER_MASK, period);
+	dwc3_writel(dwc->regs, DWC3_GUCTL, reg);
+
+	if (dwc->revision <= DWC3_REVISION_250A)
+		return;
+
+	/*
+	 * The calculation below is
+	 *
+	 * 125000 * (NSEC_PER_SEC / (rate * period) - 1)
+	 *
+	 * but rearranged for fixed-point arithmetic. The division must be
+	 * 64-bit because 125000 * NSEC_PER_SEC doesn't fit in 32 bits (and
+	 * neither does rate * period).
+	 *
+	 * Note that rate * period ~= NSEC_PER_SECOND, minus the number of
+	 * nanoseconds of error caused by the truncation which happened during
+	 * the division when calculating rate or period (whichever one was
+	 * derived from the other). We first calculate the relative error, then
+	 * scale it to units of 8 ppm.
+	 */
+	fladj = div64_u64(125000ULL * NSEC_PER_SEC, (u64)rate * period);
+	fladj -= 125000;
+
+	/*
+	 * The documented 240MHz constant is scaled by 2 to get PLS1 as well.
+	 */
+	decr = 480000000 / rate;
+
+	reg = dwc3_readl(dwc->regs, DWC3_GFLADJ);
+	reg &= ~DWC3_GFLADJ_REFCLK_FLADJ_MASK
+	    &  ~DWC3_GFLADJ_240MHZDECR
+	    &  ~DWC3_GFLADJ_240MHZDECR_PLS1;
+	reg |= FIELD_PREP(DWC3_GFLADJ_REFCLK_FLADJ_MASK, fladj)
+	    |  FIELD_PREP(DWC3_GFLADJ_240MHZDECR, decr >> 1)
+	    |  FIELD_PREP(DWC3_GFLADJ_240MHZDECR_PLS1, decr & 1);
 	dwc3_writel(dwc->regs, DWC3_GFLADJ, reg);
 }
 
@@ -461,6 +517,16 @@ static void dwc3_phy_setup(struct dwc3 *dwc)
 	if (dwc->dis_u2_freeclk_exists_quirk)
 		reg &= ~DWC3_GUSB2PHYCFG_U2_FREECLK_EXISTS;
 
+	/*
+	 * Some ULPI USB PHY does not support internal VBUS supply, to drive
+	 * the CPEN pin requires the configuration of the ULPI DRVVBUSEXTERNAL
+	 * bit of OTG_CTRL register. Controller configures the USB2 PHY
+	 * ULPIEXTVBUSDRV bit[17] of the GUSB2PHYCFG register to drive vBus
+	 * with an external supply.
+	 */
+	if (dwc->ulpi_ext_vbus_drv)
+		reg |= DWC3_GUSB2PHYCFG_ULPIEXTVBUSDRV;
+
 	dwc3_writel(dwc->regs, DWC3_GUSB2PHYCFG(0), reg);
 
 	mdelay(100);
@@ -644,6 +710,9 @@ static int dwc3_core_init(struct dwc3 *dwc)
 	/* Adjust Frame Length */
 	dwc3_frame_length_adjustment(dwc, dwc->fladj);
 
+	/* Adjust Reference Clock Period */
+	dwc3_ref_clk_period(dwc);
+
 	dwc3_set_incr_burst_type(dwc);
 
 	return 0;
@@ -708,6 +777,14 @@ static void dwc3_gadget_run(struct dwc3 *dwc)
 {
 	dwc3_writel(dwc->regs, DWC3_DCTL, DWC3_DCTL_RUN_STOP);
 	mdelay(100);
+}
+
+static void dwc3_core_stop(struct dwc3 *dwc)
+{
+	u32 reg;
+
+	reg = dwc3_readl(dwc->regs, DWC3_DCTL);
+	dwc3_writel(dwc->regs, DWC3_DCTL, reg & ~(DWC3_DCTL_RUN_STOP));
 }
 
 static void dwc3_core_exit_mode(struct dwc3 *dwc)
@@ -809,6 +886,7 @@ int dwc3_uboot_init(struct dwc3_device *dwc3_dev)
 	dwc->dis_tx_ipgap_linecheck_quirk = dwc3_dev->dis_tx_ipgap_linecheck_quirk;
 	dwc->dis_enblslpm_quirk = dwc3_dev->dis_enblslpm_quirk;
 	dwc->dis_u2_freeclk_exists_quirk = dwc3_dev->dis_u2_freeclk_exists_quirk;
+	dwc->ulpi_ext_vbus_drv = dwc3_dev->ulpi_ext_vbus_drv;
 
 	dwc->tx_de_emphasis_quirk = dwc3_dev->tx_de_emphasis_quirk;
 	if (dwc3_dev->tx_de_emphasis)
@@ -907,18 +985,18 @@ void dwc3_uboot_exit(int index)
 
 /**
  * dwc3_uboot_handle_interrupt - handle dwc3 core interrupt
- * @index: index of this controller
+ * @dev: device of this controller
  *
  * Invokes dwc3 gadget interrupts.
  *
  * Generally called from board file.
  */
-void dwc3_uboot_handle_interrupt(int index)
+void dwc3_uboot_handle_interrupt(struct udevice *dev)
 {
 	struct dwc3 *dwc = NULL;
 
 	list_for_each_entry(dwc, &dwc3_list, list) {
-		if (dwc->index != index)
+		if (dwc->dev != dev)
 			continue;
 
 		dwc3_gadget_uboot_handle_interrupt(dwc);
@@ -1028,6 +1106,8 @@ void dwc3_of_parse(struct dwc3 *dwc)
 				"snps,dis-u2-freeclk-exists-quirk");
 	dwc->tx_de_emphasis_quirk = dev_read_bool(dev,
 				"snps,tx_de_emphasis_quirk");
+	dwc->ulpi_ext_vbus_drv = dev_read_bool(dev,
+				"snps,ulpi-ext-vbus-drv");
 	tmp = dev_read_u8_array_ptr(dev, "snps,tx_de_emphasis", 1);
 	if (tmp)
 		tx_de_emphasis = *tmp;
@@ -1039,7 +1119,6 @@ void dwc3_of_parse(struct dwc3 *dwc)
 		| (dwc->is_utmi_l1_suspend << 4);
 
 	dev_read_u32(dev, "snps,quirk-frame-length-adjustment", &dwc->fladj);
-	dwc->refclk_fladj = dev_read_bool(dev, "snps,refclk_fladj");
 
 	/*
 	 * Handle property "snps,incr-burst-type-adjustment".
@@ -1058,6 +1137,9 @@ void dwc3_of_parse(struct dwc3 *dwc)
 		dwc->incrx_mode = INCRX_UNDEF_LENGTH_BURST_MODE;
 		dwc->incrx_size = max(dwc->incrx_size, val);
 	}
+	dwc->ref_clk = devm_clk_get_optional(dev, "ref");
+	if (IS_ERR(dwc->ref_clk))
+		dev_err(dev, "dwc3 ref clock not found\n");
 }
 
 int dwc3_init(struct dwc3 *dwc)
@@ -1133,6 +1215,7 @@ void dwc3_remove(struct dwc3 *dwc)
 	dwc3_core_exit_mode(dwc);
 	dwc3_event_buffers_cleanup(dwc);
 	dwc3_free_event_buffers(dwc);
+	dwc3_core_stop(dwc);
 	dwc3_core_exit(dwc);
 	kfree(dwc->mem);
 }

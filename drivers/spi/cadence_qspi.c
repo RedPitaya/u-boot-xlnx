@@ -29,6 +29,17 @@
 #define CQSPI_READ			2
 #define CQSPI_WRITE			3
 
+__weak int cadence_qspi_apb_dma_read(struct cadence_spi_priv *priv,
+				     const struct spi_mem_op *op)
+{
+	return 0;
+}
+
+__weak int cadence_qspi_versal_flash_reset(struct udevice *dev)
+{
+	return 0;
+}
+
 static int cadence_spi_write_speed(struct udevice *bus, uint hz)
 {
 	struct cadence_spi_priv *priv = dev_get_priv(bus);
@@ -162,9 +173,17 @@ static int cadence_spi_set_speed(struct udevice *bus, uint hz)
 	 * If the device tree already provides a read delay value, use that
 	 * instead of calibrating.
 	 */
-	if (priv->previous_hz != hz ||
-	    priv->qspi_calibrated_hz != hz ||
-	    priv->qspi_calibrated_cs != priv->cs) {
+	if (priv->read_delay >= 0) {
+		cadence_spi_write_speed(bus, hz);
+		cadence_qspi_apb_readdata_capture(priv->regbase, 1,
+						  priv->read_delay);
+	} else if (priv->previous_hz != hz ||
+		   priv->qspi_calibrated_hz != hz ||
+		   priv->qspi_calibrated_cs != priv->cs) {
+		/*
+		 * Calibration required for different current SCLK speed,
+		 * requested SCLK speed or chip select
+		 */
 		err = spi_calibration(bus, hz);
 		if (err)
 			return err;
@@ -184,16 +203,9 @@ static int cadence_spi_set_speed(struct udevice *bus, uint hz)
 static int cadence_spi_child_pre_probe(struct udevice *bus)
 {
 	struct spi_slave *slave = dev_get_parent_priv(bus);
-	struct cadence_spi_priv *priv = dev_get_priv(bus->parent);
 
 	slave->bytemode = SPI_4BYTE_MODE;
-	slave->option = priv->is_dual;
 
-	return 0;
-}
-
-__weak int cadence_spi_versal_flash_reset(struct udevice *dev)
-{
 	return 0;
 }
 
@@ -211,12 +223,12 @@ static int cadence_spi_probe(struct udevice *bus)
 
 	priv->regbase		= plat->regbase;
 	priv->ahbbase		= plat->ahbbase;
-	priv->is_dual		= plat->is_dual;
 	priv->is_dma		= plat->is_dma;
 	priv->is_decoded_cs	= plat->is_decoded_cs;
 	priv->fifo_depth	= plat->fifo_depth;
 	priv->fifo_width	= plat->fifo_width;
 	priv->trigger_address	= plat->trigger_address;
+	priv->read_delay	= plat->read_delay;
 	priv->ahbsize		= plat->ahbsize;
 	priv->max_hz		= plat->max_hz;
 
@@ -227,7 +239,7 @@ static int cadence_spi_probe(struct udevice *bus)
 	priv->tchsh_ns		= plat->tchsh_ns;
 	priv->tslch_ns		= plat->tslch_ns;
 
-	if (CONFIG_IS_ENABLED(ZYNQMP_FIRMWARE))
+	if (IS_ENABLED(CONFIG_ZYNQMP_FIRMWARE))
 		xilinx_pm_request(PM_REQUEST_NODE, PM_DEV_OSPI,
 				  ZYNQMP_PM_CAPABILITY_ACCESS, ZYNQMP_PM_MAX_QOS,
 				  ZYNQMP_PM_REQUEST_ACK_NO, NULL);
@@ -236,9 +248,9 @@ static int cadence_spi_probe(struct udevice *bus)
 		ret = clk_get_by_index(bus, 0, &clk);
 		if (ret) {
 #ifdef CONFIG_HAS_CQSPI_REF_CLK
-			plat->ref_clk_hz = CONFIG_CQSPI_REF_CLK;
+			priv->ref_clk_hz = CONFIG_CQSPI_REF_CLK;
 #elif defined(CONFIG_ARCH_SOCFPGA)
-			plat->ref_clk_hz = cm_get_qspi_controller_clk_hz();
+			priv->ref_clk_hz = cm_get_qspi_controller_clk_hz();
 #else
 			return ret;
 #endif
@@ -250,11 +262,9 @@ static int cadence_spi_probe(struct udevice *bus)
 		}
 	}
 
-	ret = reset_get_bulk(bus, &priv->resets);
-	if (ret)
-		dev_warn(bus, "Can't get reset: %d\n", ret);
-	else
-		reset_deassert_bulk(&priv->resets);
+	priv->resets = devm_reset_bulk_get_optional(bus);
+	if (priv->resets)
+		reset_deassert_bulk(priv->resets);
 
 	if (!priv->qspi_is_init) {
 		cadence_qspi_apb_controller_init(priv);
@@ -269,17 +279,24 @@ static int cadence_spi_probe(struct udevice *bus)
 	if (ret == -ENOTSUPP)
 		debug("DLL mode set to bypass mode : %x\n", ret);
 
-	priv->wr_delay = 50 * DIV_ROUND_UP(NSEC_PER_SEC, plat->ref_clk_hz);
+	priv->wr_delay = 50 * DIV_ROUND_UP(NSEC_PER_SEC, priv->ref_clk_hz);
 
-	/* Reset ospi flash device */
-	return cadence_spi_versal_flash_reset(bus);
+	if (!CONFIG_IS_ENABLED(DM_GPIO))
+		/* Reset ospi flash device */
+		return cadence_qspi_versal_flash_reset(bus);
+
+	return 0;
 }
 
 static int cadence_spi_remove(struct udevice *dev)
 {
 	struct cadence_spi_priv *priv = dev_get_priv(dev);
+	int ret = 0;
 
-	return reset_release_bulk(&priv->resets);
+	if (priv->resets)
+		ret = reset_release_bulk(priv->resets);
+
+	return ret;
 }
 
 static int cadence_spi_set_mode(struct udevice *bus, uint mode)
@@ -302,26 +319,25 @@ static int cadence_spi_set_mode(struct udevice *bus, uint mode)
 	return 0;
 }
 
-static int cadence_qspi_rx_dll_tuning(struct cadence_spi_priv *priv,
+static int cadence_qspi_rx_dll_tuning(struct spi_slave *spi, const struct spi_mem_op *op,
 				      u32 txtap, u8 extra_dummy)
 {
+	struct udevice *bus = spi->dev->parent;
+	struct cadence_spi_priv *priv = dev_get_priv(bus);
 	void *regbase = priv->regbase;
 	int ret, i, j;
-	u8 id[CQSPI_READ_ID_LEN + 1], min_rxtap = 0, max_rxtap = 0, avg_rxtap,
+	u8 *id = op->data.buf.in;
+	u8 min_rxtap = 0, max_rxtap = 0, avg_rxtap,
 	max_tap, windowsize, dummy_flag = 0, max_index = 0, min_index = 0;
+	unsigned int reg;
 	s8 max_windowsize = -1;
 	bool id_matched, rxtapfound = false;
-	struct spi_mem_op op =
-		SPI_MEM_OP(SPI_MEM_OP_CMD(CQSPI_READ_ID | (CQSPI_READ_ID << 8), 8),
-			   SPI_MEM_OP_NO_ADDR,
-			   SPI_MEM_OP_DUMMY(8, 8),
-			   SPI_MEM_OP_DATA_IN(CQSPI_READ_ID_LEN, id, 8));
 
-	op.cmd.nbytes = 2;
-	op.dummy.nbytes *= 2;
-	op.cmd.dtr = true;
-	op.addr.dtr = true;
-	op.data.dtr = true;
+	/* Return if octal-spi disabled */
+	reg = readl(regbase + CQSPI_REG_CONFIG);
+	reg &= CQSPI_REG_CONFIG_ENABLE;
+	if (!reg)
+		return 0;
 
 	max_tap = CQSPI_MAX_DLL_TAPS;
 	/*
@@ -351,9 +367,9 @@ static int cadence_qspi_rx_dll_tuning(struct cadence_spi_priv *priv,
 			}
 		}
 
-		ret = cadence_qspi_apb_command_read_setup(priv, &op);
+		ret = cadence_qspi_apb_command_read_setup(priv, op);
 		if (!ret) {
-			ret = cadence_qspi_apb_command_read(priv, &op);
+			ret = cadence_qspi_apb_command_read(priv, op);
 			if (ret < 0) {
 				printf("error %d reading JEDEC ID\n", ret);
 				return ret;
@@ -361,8 +377,8 @@ static int cadence_qspi_rx_dll_tuning(struct cadence_spi_priv *priv,
 		}
 
 		id_matched = true;
-		for (j = 0; j < CQSPI_READ_ID_LEN; j++) {
-			if (priv->device_id[j] != id[j]) {
+		for (j = 0; j < op->data.nbytes; j++) {
+			if (spi->device_id[j] != id[j]) {
 				id_matched = false;
 				break;
 			}
@@ -429,13 +445,14 @@ static int cadence_qspi_rx_dll_tuning(struct cadence_spi_priv *priv,
 	return avg_rxtap;
 }
 
-static int cadence_spi_setdlldelay(struct udevice *bus)
+static int cadence_spi_setdlldelay(struct spi_slave *spi, const struct spi_mem_op *op)
 {
+	struct udevice *bus = spi->dev->parent;
 	struct cadence_spi_priv *priv = dev_get_priv(bus);
 	void *regbase = priv->regbase;
 	u32 txtap;
-	int ret;
-	u8 extra_dummy, rxtap;
+	int ret, rxtap;
+	u8 extra_dummy;
 
 	ret = wait_for_bit_le32(regbase + CQSPI_REG_CONFIG,
 				1 << CQSPI_REG_CONFIG_IDLE_LSB,
@@ -459,7 +476,7 @@ static int cadence_spi_setdlldelay(struct udevice *bus)
 		/* Check for loopback lock */
 		ret = wait_for_bit_le32(regbase + CQSPI_REG_DLL_LOWER,
 					CQSPI_REG_DLL_LOWER_LPBK_LOCK_MASK,
-					1, CQSPI_TIMEOUT_MS, 0);
+					1, 500 * CQSPI_TIMEOUT_MS, 0);
 		if (ret) {
 			printf("Loopback lock bit error (%i)\n", ret);
 			return ret;
@@ -481,7 +498,7 @@ static int cadence_spi_setdlldelay(struct udevice *bus)
 		if (extra_dummy)
 			priv->extra_dummy = true;
 
-		rxtap = cadence_qspi_rx_dll_tuning(priv, txtap, extra_dummy);
+		rxtap = cadence_qspi_rx_dll_tuning(spi, op, txtap, extra_dummy);
 		if (extra_dummy && rxtap < 0) {
 			printf("Failed RX dll tuning\n");
 			return rxtap;
@@ -544,7 +561,9 @@ static int priv_setup_ddrmode(struct udevice *bus)
 	setbits_le32(regbase + CQSPI_REG_CONFIG,
 		     CQSPI_REG_CONFIG_DTR_PROT_EN_MASK);
 
-	clrsetbits_le32(regbase + CQSPI_REG_RD_DATA_CAPTURE, ~0,
+	clrsetbits_le32(regbase + CQSPI_REG_RD_DATA_CAPTURE,
+			(CQSPI_REG_RD_DATA_CAPTURE_DELAY_MASK <<
+			 CQSPI_REG_RD_DATA_CAPTURE_DELAY_LSB),
 			CQSPI_REG_READCAPTURE_DQS_ENABLE);
 
 	/* Enable QSPI */
@@ -553,8 +572,9 @@ static int priv_setup_ddrmode(struct udevice *bus)
 	return 0;
 }
 
-static int cadence_spi_setup_ddrmode(struct udevice *bus)
+static int cadence_spi_setup_ddrmode(struct spi_slave *spi, const struct spi_mem_op *op)
 {
+	struct udevice *bus = spi->dev->parent;
 	struct cadence_spi_priv *priv = dev_get_priv(bus);
 	int ret;
 
@@ -566,7 +586,7 @@ static int cadence_spi_setup_ddrmode(struct udevice *bus)
 		return ret;
 
 	priv->edge_mode = CQSPI_EDGE_MODE_DDR;
-	ret = cadence_spi_setdlldelay(bus);
+	ret = cadence_spi_setdlldelay(spi, op);
 	if (ret) {
 		printf("DDR tuning failed with error %d\n", ret);
 		return ret;
@@ -593,7 +613,7 @@ static int cadence_spi_setup_strmode(struct udevice *bus)
 	}
 
 	ret = wait_for_bit_le32(base + CQSPI_REG_CONFIG,
-				1 << CQSPI_REG_CONFIG_IDLE_LSB,
+				BIT(CQSPI_REG_CONFIG_IDLE_LSB),
 				1, CQSPI_TIMEOUT_MS, 0);
 	if (ret) {
 		printf("spi_wait_idle error : 0x%x\n", ret);
@@ -631,9 +651,6 @@ static int cadence_spi_mem_exec_op(struct spi_slave *spi,
 			return err;
 	}
 
-	if (!CONFIG_IS_ENABLED(SPI_FLASH_DTR_ENABLE) && op->cmd.dtr)
-		return 0;
-
 	if (spi->flags & SPI_XFER_U_PAGE)
 		priv->cs = CQSPI_CS1;
 	else
@@ -643,12 +660,17 @@ static int cadence_spi_mem_exec_op(struct spi_slave *spi,
 	cadence_qspi_apb_chipselect(base, priv->cs, priv->is_decoded_cs);
 
 	if (op->data.dir == SPI_MEM_DATA_IN && op->data.buf.in) {
-		if (!op->addr.nbytes)
+		/*
+		 * Performing reads in DAC mode forces to read minimum 4 bytes
+		 * which is unsupported on some flash devices during register
+		 * reads, prefer STIG mode for such small reads.
+		 */
+		if (op->data.nbytes <= CQSPI_STIG_DATA_LEN_MAX)
 			mode = CQSPI_STIG_READ;
 		else
 			mode = CQSPI_READ;
 	} else {
-		if (!op->addr.nbytes || !op->data.buf.out)
+		if (op->data.nbytes <= CQSPI_STIG_DATA_LEN_MAX)
 			mode = CQSPI_STIG_WRITE;
 		else
 			mode = CQSPI_WRITE;
@@ -669,9 +691,7 @@ static int cadence_spi_mem_exec_op(struct spi_slave *spi,
 		err = cadence_qspi_apb_read_setup(priv, op);
 		if (!err) {
 			if (priv->is_dma)
-				err = cadence_qspi_apb_dma_read(priv,
-								op->data.nbytes,
-								op->data.buf.in);
+				err = cadence_qspi_apb_dma_read(priv, op);
 			else
 				err = cadence_qspi_apb_read_execute(priv, op);
 		}
@@ -686,15 +706,14 @@ static int cadence_spi_mem_exec_op(struct spi_slave *spi,
 		break;
 	}
 
-	if (CONFIG_IS_ENABLED(SPI_FLASH_DTR_ENABLE) &&
-	    (spi->flags & SPI_XFER_SET_DDR))
-		err = cadence_spi_setup_ddrmode(bus);
+	if ((spi->flags & SPI_XFER_SET_DDR) && op->cmd.dtr)
+		err = cadence_spi_setup_ddrmode(spi, op);
 
 	return err;
 }
 
-bool cadence_spi_mem_dtr_supports_op(struct spi_slave *slave,
-				     const struct spi_mem_op *op)
+static bool cadence_spi_mem_dtr_supports_op(struct spi_slave *slave,
+					    const struct spi_mem_op *op)
 {
 	/*
 	 * In DTR mode, except op->cmd all other parameters like address,
@@ -713,8 +732,15 @@ static bool cadence_spi_mem_supports_op(struct spi_slave *slave,
 {
 	bool all_true, all_false;
 
-	all_true = op->cmd.dtr && op->addr.dtr && op->dummy.dtr &&
-		   op->data.dtr;
+	/*
+	 * op->dummy.dtr is required for converting nbytes into ncycles.
+	 * Also, don't check the dtr field of the op phase having zero nbytes.
+	 */
+	all_true = op->cmd.dtr &&
+		   (!op->addr.nbytes || op->addr.dtr) &&
+		   (!op->dummy.nbytes || op->dummy.dtr) &&
+		   (!op->data.nbytes || op->data.dtr);
+
 	all_false = !op->cmd.dtr && !op->addr.dtr && !op->dummy.dtr &&
 		    !op->data.dtr;
 
@@ -734,9 +760,8 @@ static int cadence_spi_of_to_plat(struct udevice *bus)
 	struct cadence_spi_priv *priv = dev_get_priv(bus);
 	ofnode subnode;
 
-	plat->regbase = (void *)devfdt_get_addr_index(bus, 0);
-	plat->ahbbase = (void *)devfdt_get_addr_size_index(bus, 1,
-			&plat->ahbsize);
+	plat->regbase = devfdt_get_addr_index_ptr(bus, 0);
+	plat->ahbbase = devfdt_get_addr_size_index_ptr(bus, 1, &plat->ahbsize);
 	plat->is_decoded_cs = dev_read_bool(bus, "cdns,is-decoded-cs");
 	plat->fifo_depth = dev_read_u32_default(bus, "cdns,fifo-depth", 128);
 	plat->fifo_width = dev_read_u32_default(bus, "cdns,fifo-width", 4);
@@ -749,7 +774,7 @@ static int cadence_spi_of_to_plat(struct udevice *bus)
 
 	plat->is_dma = dev_read_bool(bus, "cdns,is-dma");
 
-	/* All other paramters are embedded in the child node */
+	/* All other parameters are embedded in the child node */
 	subnode = dev_read_first_subnode(bus);
 	if (!ofnode_valid(subnode)) {
 		printf("Error: subnode with SPI flash config missing!\n");
@@ -759,11 +784,6 @@ static int cadence_spi_of_to_plat(struct udevice *bus)
 	/* Use 500 KHz as a suitable default */
 	plat->max_hz = ofnode_read_u32_default(subnode, "spi-max-frequency",
 					       500000);
-
-	if (dev_read_u32_default(bus, "is-stacked", -1) == 1)
-		plat->is_dual = CQSPI_DUAL_STACKED_FLASH;
-	else
-		plat->is_dual = CQSPI_SINGLE_FLASH;
 
 	/* Read other parameters from DT */
 	plat->page_size = ofnode_read_u32_default(subnode, "page-size", 256);

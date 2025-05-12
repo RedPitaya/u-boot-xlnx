@@ -12,7 +12,6 @@
 #include <memalign.h>
 #include <linux/err.h>
 #include <u-boot/crc.h>
-#include <u-boot/crc.h>
 
 /**
  * Compute the CRC-32 of the bootloader control struct.
@@ -22,7 +21,7 @@
  *
  * @param[in] abc bootloader control block
  *
- * @return crc32 sum
+ * Return: crc32 sum
  */
 static uint32_t ab_control_compute_crc(struct bootloader_control *abc)
 {
@@ -38,7 +37,7 @@ static uint32_t ab_control_compute_crc(struct bootloader_control *abc)
  *
  * @param[in] abc bootloader control block
  *
- * @return 0 on success and a negative on error
+ * Return: 0 on success and a negative on error
  */
 static int ab_control_default(struct bootloader_control *abc)
 {
@@ -81,15 +80,17 @@ static int ab_control_default(struct bootloader_control *abc)
  * @param[in] part_info Partition in 'dev_desc' where to read from, normally
  *			the "misc" partition should be used
  * @param[out] pointer to pointer to bootloader_control data
- * @return 0 on success and a negative on error
+ * Return: 0 on success and a negative on error
  */
 static int ab_control_create_from_disk(struct blk_desc *dev_desc,
 				       const struct disk_partition *part_info,
-				       struct bootloader_control **abc)
+				       struct bootloader_control **abc,
+				       ulong offset)
 {
 	ulong abc_offset, abc_blocks, ret;
 
-	abc_offset = offsetof(struct bootloader_message_ab, slot_suffix);
+	abc_offset = offset +
+		     offsetof(struct bootloader_message_ab, slot_suffix);
 	if (abc_offset % part_info->blksz) {
 		log_err("ANDROID: Boot control block not block aligned.\n");
 		return -EINVAL;
@@ -131,15 +132,16 @@ static int ab_control_create_from_disk(struct blk_desc *dev_desc,
  * @param[in] part_info Partition on the 'dev_desc' where to write
  * @param[in] abc Pointer to the boot control struct and the extra bytes after
  *                it up to the nearest block boundary
- * @return 0 on success and a negative on error
+ * Return: 0 on success and a negative on error
  */
 static int ab_control_store(struct blk_desc *dev_desc,
 			    const struct disk_partition *part_info,
-			    struct bootloader_control *abc)
+			    struct bootloader_control *abc, ulong offset)
 {
 	ulong abc_offset, abc_blocks, ret;
 
-	abc_offset = offsetof(struct bootloader_message_ab, slot_suffix) /
+	abc_offset = offset +
+		     offsetof(struct bootloader_message_ab, slot_suffix) /
 		     part_info->blksz;
 	abc_blocks = DIV_ROUND_UP(sizeof(struct bootloader_control),
 				  part_info->blksz);
@@ -160,7 +162,7 @@ static int ab_control_store(struct blk_desc *dev_desc,
  *
  * @param[in] a The first bootable slot metadata
  * @param[in] b The second bootable slot metadata
- * @return Negative if the slot "a" is better, positive of the slot "b" is
+ * Return: Negative if the slot "a" is better, positive of the slot "b" is
  *         better or 0 if they are equally good.
  */
 static int ab_compare_slots(const struct slot_metadata *a,
@@ -181,15 +183,19 @@ static int ab_compare_slots(const struct slot_metadata *a,
 	return 0;
 }
 
-int ab_select_slot(struct blk_desc *dev_desc, struct disk_partition *part_info)
+int ab_select_slot(struct blk_desc *dev_desc, struct disk_partition *part_info,
+		   bool dec_tries)
 {
 	struct bootloader_control *abc = NULL;
 	u32 crc32_le;
 	int slot, i, ret;
 	bool store_needed = false;
 	char slot_suffix[4];
+#if ANDROID_AB_BACKUP_OFFSET
+	struct bootloader_control *backup_abc = NULL;
+#endif
 
-	ret = ab_control_create_from_disk(dev_desc, part_info, &abc);
+	ret = ab_control_create_from_disk(dev_desc, part_info, &abc, 0);
 	if (ret < 0) {
 		/*
 		 * This condition represents an actual problem with the code or
@@ -199,22 +205,53 @@ int ab_select_slot(struct blk_desc *dev_desc, struct disk_partition *part_info)
 		return ret;
 	}
 
+#if ANDROID_AB_BACKUP_OFFSET
+	ret = ab_control_create_from_disk(dev_desc, part_info, &backup_abc,
+					  ANDROID_AB_BACKUP_OFFSET);
+	if (ret < 0) {
+		free(abc);
+		return ret;
+	}
+#endif
+
 	crc32_le = ab_control_compute_crc(abc);
 	if (abc->crc32_le != crc32_le) {
 		log_err("ANDROID: Invalid CRC-32 (expected %.8x, found %.8x),",
 			crc32_le, abc->crc32_le);
-		log_err("re-initializing A/B metadata.\n");
+#if ANDROID_AB_BACKUP_OFFSET
+		crc32_le = ab_control_compute_crc(backup_abc);
+		if (backup_abc->crc32_le != crc32_le) {
+			log_err("ANDROID: Invalid backup CRC-32 ")
+			log_err("expected %.8x, found %.8x),",
+				crc32_le, backup_abc->crc32_le);
+#endif
 
-		ret = ab_control_default(abc);
-		if (ret < 0) {
-			free(abc);
-			return -ENODATA;
+			log_err("re-initializing A/B metadata.\n");
+
+			ret = ab_control_default(abc);
+			if (ret < 0) {
+#if ANDROID_AB_BACKUP_OFFSET
+				free(backup_abc);
+#endif
+				free(abc);
+				return -ENODATA;
+			}
+#if ANDROID_AB_BACKUP_OFFSET
+		} else {
+			/*
+			 * Backup is valid. Copy it to the primary
+			 */
+			memcpy(abc, backup_abc, sizeof(*abc));
 		}
+#endif
 		store_needed = true;
 	}
 
 	if (abc->magic != BOOT_CTRL_MAGIC) {
 		log_err("ANDROID: Unknown A/B metadata: %.8x\n", abc->magic);
+#if ANDROID_AB_BACKUP_OFFSET
+		free(backup_abc);
+#endif
 		free(abc);
 		return -ENODATA;
 	}
@@ -222,6 +259,9 @@ int ab_select_slot(struct blk_desc *dev_desc, struct disk_partition *part_info)
 	if (abc->version > BOOT_CTRL_VERSION) {
 		log_err("ANDROID: Unsupported A/B metadata version: %.8x\n",
 			abc->version);
+#if ANDROID_AB_BACKUP_OFFSET
+		free(backup_abc);
+#endif
 		free(abc);
 		return -ENODATA;
 	}
@@ -272,8 +312,10 @@ int ab_select_slot(struct blk_desc *dev_desc, struct disk_partition *part_info)
 		log_err("ANDROID: Attempting slot %c, tries remaining %d\n",
 			BOOT_SLOT_NAME(slot),
 			abc->slot_info[slot].tries_remaining);
-		abc->slot_info[slot].tries_remaining--;
-		store_needed = true;
+		if (dec_tries) {
+			abc->slot_info[slot].tries_remaining--;
+			store_needed = true;
+		}
 	}
 
 	if (slot >= 0) {
@@ -294,8 +336,21 @@ int ab_select_slot(struct blk_desc *dev_desc, struct disk_partition *part_info)
 
 	if (store_needed) {
 		abc->crc32_le = ab_control_compute_crc(abc);
-		ab_control_store(dev_desc, part_info, abc);
+		ab_control_store(dev_desc, part_info, abc, 0);
 	}
+
+#if ANDROID_AB_BACKUP_OFFSET
+	/*
+	 * If the backup doesn't match the primary, write the primary
+	 * to the backup offset
+	 */
+	if (memcmp(backup_abc, abc, sizeof(*abc)) != 0) {
+		ab_control_store(dev_desc, part_info, abc,
+				 ANDROID_AB_BACKUP_OFFSET);
+	}
+	free(backup_abc);
+#endif
+
 	free(abc);
 
 	if (slot < 0)

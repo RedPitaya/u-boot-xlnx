@@ -12,7 +12,6 @@
 #include <dm.h>
 #include <env.h>
 #include <env_internal.h>
-#include <flash.h>
 #include <malloc.h>
 #include <spi.h>
 #include <spi_flash.h>
@@ -23,10 +22,6 @@
 #include <asm/global_data.h>
 #include <dm/device-internal.h>
 #include <u-boot/crc.h>
-
-#ifndef CONFIG_SPL_BUILD
-#define INITENV
-#endif
 
 #define	OFFSET_INVALID		(~(u32)0)
 
@@ -49,10 +44,10 @@ static int setup_flash_device(struct spi_flash **env_flash)
 #if CONFIG_IS_ENABLED(DM_SPI_FLASH)
 	struct udevice *new;
 	int	ret;
+	int dev = spi_get_env_dev();
 
 	/* speed and mode will be read from DT */
-	ret = spi_flash_probe_bus_cs(CONFIG_ENV_SPI_BUS, CONFIG_ENV_SPI_CS,
-				     CONFIG_ENV_SPI_MAX_HZ, CONFIG_ENV_SPI_MODE,
+	ret = spi_flash_probe_bus_cs(dev, CONFIG_ENV_SPI_CS,
 				     &new);
 	if (ret) {
 		env_set_default("spi_flash_probe_bus_cs() failed", 0);
@@ -322,20 +317,24 @@ done:
 	return ret;
 }
 
-#if CONFIG_ENV_ADDR != 0x0
 __weak void *env_sf_get_env_addr(void)
 {
+#ifndef CONFIG_SPL_BUILD
 	return (void *)CONFIG_ENV_ADDR;
-}
+#else
+	return NULL;
 #endif
+}
 
-#if defined(INITENV) && (CONFIG_ENV_ADDR != 0x0)
 /*
  * check if Environment on CONFIG_ENV_ADDR is valid.
  */
 static int env_sf_init_addr(void)
 {
 	env_t *env_ptr = (env_t *)env_sf_get_env_addr();
+
+	if (!env_ptr)
+		return -ENOENT;
 
 	if (crc32(0, env_ptr->data, ENV_SIZE) == env_ptr->crc) {
 		gd->env_addr = (ulong)&(env_ptr->data);
@@ -346,7 +345,6 @@ static int env_sf_init_addr(void)
 
 	return 0;
 }
-#endif
 
 #if defined(CONFIG_ENV_SPI_EARLY)
 /*
@@ -432,9 +430,10 @@ out:
 
 static int env_sf_init(void)
 {
-#if defined(INITENV) && (CONFIG_ENV_ADDR != 0x0)
-	return env_sf_init_addr();
-#elif defined(CONFIG_ENV_SPI_EARLY)
+	int ret = env_sf_init_addr();
+	if (ret != -ENOENT)
+		return ret;
+#ifdef CONFIG_ENV_SPI_EARLY
 	return env_sf_init_early();
 #endif
 	/*

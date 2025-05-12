@@ -10,16 +10,11 @@
 #include <asm-offsets.h>
 #include <config.h>
 
-#if defined(CONFIG_STATIC_RELA)
 #define SYM_ADDR(reg, reg_add, symbol)	\
 	mfs	r20, rpc; \
 	addik	r20, r20, _GLOBAL_OFFSET_TABLE_ + 8; \
 	lwi	reg, r20, symbol@GOT; \
 	addk	reg, reg reg_add;
-#else
-#define SYM_ADDR(reg, reg_add, symbol)	\
-	addi	reg, reg_add, symbol
-#endif
 
 	.text
 	.global _start
@@ -32,10 +27,9 @@ _start:
 	mts	rshr, r20
 
 #if defined(CONFIG_SPL_BUILD)
-	addi	r1, r0, CONFIG_SPL_STACK_ADDR
+	addi	r1, r0, CONFIG_SPL_STACK
 #else
 	add	r1, r0, r20
-#if defined(CONFIG_STATIC_RELA)
 	bri	1f
 
 	/* Force alignment for easier ASM code below */
@@ -55,19 +49,18 @@ uboot_sym_start:
 	add	r6, r0, r0
 
 	lwi	r7, r20, ALIGNMENT_ADDR
-	addi	r7, r7, -CONFIG_SYS_TEXT_BASE
+	addi	r7, r7, -CONFIG_TEXT_BASE
 	add	r7, r7, r5
 	lwi	r8, r20, ALIGNMENT_ADDR + 0x4
-	addi	r8, r8, -CONFIG_SYS_TEXT_BASE
+	addi	r8, r8, -CONFIG_TEXT_BASE
 	add	r8, r8, r5
 	lwi	r9, r20, ALIGNMENT_ADDR + 0x8
-	addi	r9, r9, -CONFIG_SYS_TEXT_BASE
+	addi	r9, r9, -CONFIG_TEXT_BASE
 	add	r9, r9, r5
-	addi	r10, r0, CONFIG_SYS_TEXT_BASE
+	addi	r10, r0, CONFIG_TEXT_BASE
 
 	brlid	r15, mb_fix_rela
 	nop
-#endif
 #endif
 
 	addi	r1, r1, -4	/* Decrement SP to top of memory */
@@ -97,10 +90,15 @@ uboot_sym_start:
 	nop
 #endif
 
+	/*
+	 * Initialize global data cpuinfo with default values (cache
+	 * size, cache line size, etc).
+	 */
+	brlid	r15, microblaze_early_cpuinfo_init
+	nop
+
 	/* Flush cache before enable cache */
-	addik	r5, r0, 0
-	addik	r6, r0, XILINX_DCACHE_BYTE_SIZE
-	brlid	r15, flush_cache
+	brlid	r15, flush_cache_all
 	nop
 
 	/* enable instruction and data cache */
@@ -268,39 +266,6 @@ __setup_exceptions:
 	.end	__setup_exceptions
 
 /*
- * Read 16bit little endian
- */
-	.text
-	.global	in16
-	.ent	in16
-	.align	2
-in16:	lhu	r3, r0, r5
-	bslli	r4, r3, 8
-	bsrli	r3, r3, 8
-	andi	r4, r4, 0xffff
-	or	r3, r3, r4
-	rtsd	r15, 8
-	sext16	r3, r3
-	.end	in16
-
-/*
- * Write 16bit little endian
- * first parameter(r5) - address, second(r6) - short value
- */
-	.text
-	.global	out16
-	.ent	out16
-	.align	2
-out16:	bslli	r3, r6, 8
-	bsrli	r6, r6, 8
-	andi	r3, r3, 0xffff
-	or	r3, r3, r6
-	sh	r3, r0, r5
-	rtsd	r15, 8
-	or	r0, r0, r0
-	.end	out16
-
-/*
  * Relocate u-boot
  */
 	.text
@@ -338,7 +303,6 @@ relocate_code:
 	brlid	r15, __setup_exceptions
 	nop
 
-#if defined(CONFIG_STATIC_RELA)
 	/* reloc_offset is current location */
 	SYM_ADDR(r10, r0, _start)
 
@@ -359,32 +323,10 @@ relocate_code:
 	add	r9, r9, r5
 	brlid	r15, mb_fix_rela
 	nop
-
 	/* end of code which does relocation */
-#else
-	/* Check if GOT exist */
-	addik	r21, r23, _got_start
-	addik	r22, r23, _got_end
-	cmpu	r12, r21, r22
-	beqi	r12, 2f /* No GOT table - jump over */
-
-	/* Skip last 3 entries plus 1 because of loop boundary below */
-	addik	r22, r22, -0x10
-
-        /* Relocate the GOT. */
-3:	lw	r12, r21, r0 /* Load entry */
-	addk	r12, r12, r23 /* Add reloc offset */
-	sw	r12, r21, r0 /* Save entry back */
-
-	cmpu	r12, r21, r22 /* Check if this cross boundary */
-	bneid	r12, 3b
-	addik	r21. r21, 4
-#endif
 
 	/* Flush caches to ensure consistency */
-	addik	r5, r0, 0
-	addik	r6, r0, XILINX_DCACHE_BYTE_SIZE
-	brlid	r15, flush_cache
+	brlid	r15, flush_cache_all
 	nop
 
 2:	addi	r5, r31, 0 /* gd is initialized in board_r.c */

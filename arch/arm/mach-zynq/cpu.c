@@ -22,6 +22,7 @@ xilinx_desc fpga = {
 	.family = xilinx_zynq,
 	.iface = devcfg,
 	.operations = &zynq_op,
+	.flags = FPGA_LEGACY,
 };
 #endif
 
@@ -34,9 +35,11 @@ static const struct {
 } zynq_fpga_descs[] = {
 	ZYNQ_DESC(7Z007S),
 	ZYNQ_DESC(7Z010),
+	ZYNQ_DESC(7Z010_LR),
 	ZYNQ_DESC(7Z012S),
 	ZYNQ_DESC(7Z014S),
 	ZYNQ_DESC(7Z015),
+	ZYNQ_DESC(7Z020_LR),
 	ZYNQ_DESC(7Z020),
 	ZYNQ_DESC(7Z030),
 	ZYNQ_DESC(7Z035),
@@ -53,7 +56,7 @@ int arch_cpu_init(void)
 	writel(0x757BDF0D, &devcfg_base->unlock);
 	writel(0xFFFFFFFF, &devcfg_base->rom_shadow);
 
-#if (CONFIG_SYS_SDRAM_BASE == 0)
+#if (CFG_SYS_SDRAM_BASE == 0)
 	/* remap DDR to zero, FILTERSTART */
 	writel(0, &scu_base->filter_start);
 

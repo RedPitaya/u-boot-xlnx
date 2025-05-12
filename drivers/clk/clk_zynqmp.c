@@ -12,6 +12,7 @@
 #include <linux/bitops.h>
 #include <clk-uclass.h>
 #include <clk.h>
+#include <zynqmp_firmware.h>
 #include <asm/arch/sys_proto.h>
 #include <dm.h>
 #include <linux/err.h>
@@ -238,6 +239,12 @@ static u32 zynqmp_clk_get_register(enum zynqmp_clk id)
 		return CRF_APB_DBG_TRACE_CTRL;
 	case dbg_tstmp:
 		return CRF_APB_DBG_TSTMP_CTRL;
+	case dp_video_ref:
+		return CRF_APB_DP_VIDEO_REF_CTRL;
+	case dp_audio_ref:
+		return CRF_APB_DP_AUDIO_REF_CTRL;
+	case dp_stc_ref:
+		return CRF_APB_DP_STC_REF_CTRL;
 	case gpu_ref ...  gpu_pp1_ref:
 		return CRF_APB_GPU_REF_CTRL;
 	case ddr_ref:
@@ -263,17 +270,22 @@ static u32 zynqmp_clk_get_register(enum zynqmp_clk id)
 	case usb3_dual_ref:
 		return CRL_APB_USB3_DUAL_REF_CTRL;
 	case gem_tsu_ref:
+	case gem_tsu:
 		return CRL_APB_GEM_TSU_REF_CTRL;
 	case gem0_tx:
+	case gem0_rx:
 	case gem0_ref:
 		return CRL_APB_GEM0_REF_CTRL;
 	case gem1_tx:
+	case gem1_rx:
 	case gem1_ref:
 		return CRL_APB_GEM1_REF_CTRL;
 	case gem2_tx:
+	case gem2_rx:
 	case gem2_ref:
 		return CRL_APB_GEM2_REF_CTRL;
 	case gem3_tx:
+	case gem3_rx:
 	case gem3_ref:
 		return CRL_APB_GEM3_REF_CTRL;
 	case usb0_bus_ref:
@@ -673,6 +685,7 @@ static ulong zynqmp_clk_get_rate(struct clk *clk)
 	case dll_ref:
 		return zynqmp_clk_get_dll_rate(priv);
 	case gem_tsu_ref:
+	case dp_video_ref ... dp_stc_ref:
 	case pl0 ... pl3:
 	case gem0_ref ... gem3_ref:
 	case gem0_tx ... gem3_tx:
@@ -684,6 +697,7 @@ static ulong zynqmp_clk_get_rate(struct clk *clk)
 	case topsw_lsbus:
 	case sata_ref ... gpu_pp1_ref:
 		two_divs = true;
+		fallthrough;
 	case cpu_r5:
 	case dbg_fpd:
 	case ams_ref:
@@ -710,8 +724,11 @@ static ulong zynqmp_clk_set_rate(struct clk *clk, ulong rate)
 	switch (id) {
 	case gem0_ref ... gem3_ref:
 	case gem0_tx ... gem3_tx:
+	case gem0_rx ... gem3_rx:
+	case gem_tsu:
 	case qspi_ref ... can1_ref:
 	case usb0_bus_ref ... usb3_dual_ref:
+	case dp_video_ref ... dp_stc_ref:
 		return zynqmp_clk_set_peripheral_rate(priv, id,
 						      rate, two_divs);
 	default:
@@ -828,6 +845,7 @@ static int zynqmp_clk_enable(struct clk *clk)
 		break;
 	case qspi_ref ... can1_ref:
 	case lpd_lsbus:
+	case topsw_lsbus:
 		clkact_shift = 24;
 		mask = 0x1;
 		break;

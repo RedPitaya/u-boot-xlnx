@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2014 - 2015 Xilinx, Inc.
- * Michal Simek <michal.simek@xilinx.com>
+ * Michal Simek <michal.simek@amd.com>
  */
 
 #ifndef _ASM_ARCH_HARDWARE_H
@@ -42,6 +42,8 @@
 #define CRLAPB_DBG_LPD_CTRL_SETUP_CLK	0x01002002
 #define CRLAPB_RST_LPD_DBG_RESET	0
 
+#define CRL_APB_SOFT_RESET_CTRL_MASK	0x10
+
 struct crlapb_regs {
 	u32 reserved0[36];
 	u32 cpu_r5_ctrl; /* 0x90 */
@@ -51,7 +53,9 @@ struct crlapb_regs {
 	u32 timestamp_ref_ctrl; /* 0x128 */
 	u32 reserved3[53];
 	u32 boot_mode; /* 0x200 */
-	u32 reserved4_0[7];
+	u32 reserved4_0[5];
+	u32 soft_reset; /* 0x218 */
+	u32 reserved4_10;
 	u32 reset_reason; /* 0x220 */
 	u32 reserved4_1[6];
 	u32 rst_lpd_top; /* 0x23C */
@@ -152,8 +156,12 @@ struct apu_regs {
 #define CSU_JTAG_CHAIN_WR_SETUP		GENMASK(1, 0)
 #define CSU_PCAP_PROG_RELEASE_PL	BIT(0)
 
+#define ZYNQMP_CSU_STATUS_AUTHENTICATED	BIT(0)
+#define ZYNQMP_CSU_STATUS_ENCRYPTED	BIT(1)
+
 struct csu_regs {
-	u32 reserved0[4];
+	u32 status;
+	u32 reserved0[3];
 	u32 multi_boot;
 	u32 reserved1[7];
 	u32 jtag_chain_status_wr;
@@ -162,7 +170,7 @@ struct csu_regs {
 	u32 jtag_dap_cfg;
 	u32 idcode;
 	u32 version;
-	u32 reserved2[3055];
+	u32 reserved2[3054];
 	u32 pcap_prog;
 };
 
@@ -171,7 +179,9 @@ struct csu_regs {
 #define ZYNQMP_PMU_BASEADDR	0xFFD80000
 
 struct pmu_regs {
-	u32 reserved[18];
+	u32 reserved0[16];
+	u32 gen_storage4; /* 0x40 */
+	u32 reserved1[1];
 	u32 gen_storage6; /* 0x48 */
 };
 

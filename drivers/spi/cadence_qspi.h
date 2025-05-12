@@ -18,9 +18,6 @@
 #define CQSPI_DECODER_MAX_CS		16
 #define CQSPI_READ_CAPTURE_MAX_DELAY	16
 
-#define CQSPI_SINGLE_FLASH			0
-#define CQSPI_DUAL_STACKED_FLASH		1
-
 #define CQSPI_CS0				0
 #define CQSPI_CS1				1
 
@@ -38,9 +35,9 @@
 
 #define CQSPI_STIG_DATA_LEN_MAX                 8
 
-#define CQSPI_DUMMY_CLKS_PER_BYTE		8
+#define CQSPI_DUMMY_CLKS_PER_BYTE               8
 #define CQSPI_DUMMY_BYTES_MAX                   4
-#define CQSPI_DUMMY_CLKS_MAX			31
+#define CQSPI_DUMMY_CLKS_MAX                    31
 
 #define CQSPI_TX_TAP_MASTER			0x1E
 #define CQSPI_MAX_DLL_TAPS			127
@@ -58,8 +55,13 @@
 #define CQSPI_READ_ID_LEN			3
 #define CQSPI_READID_LOOP_MAX			10
 #define TERA_MACRO				1000000000000l
+#define TAP_GRAN_SEL_MIN_FREQ			120000000
 
 #define OSPI_CTRL_RST				0xF1260304
+
+#define CMD_4BYTE_FAST_READ			0x0C
+#define CMD_4BYTE_OCTAL_READ			0x7c
+#define CMD_4BYTE_READ				0x13
 
 /****************************************************************************
  * Controller's configuration and status register (offset from QSPI_BASE)
@@ -190,10 +192,10 @@
 #define CQSPI_REG_CMDWRITEDATALOWER             0xA8
 #define CQSPI_REG_CMDWRITEDATAUPPER             0xAC
 
-#define CQSPI_REG_OP_EXT_LOWER			0xE0
-#define CQSPI_REG_OP_EXT_READ_LSB		24
-#define CQSPI_REG_OP_EXT_WRITE_LSB		16
-#define CQSPI_REG_OP_EXT_STIG_LSB		0
+#define CQSPI_REG_OP_EXT_LOWER                  0xE0
+#define CQSPI_REG_OP_EXT_READ_LSB               24
+#define CQSPI_REG_OP_EXT_WRITE_LSB              16
+#define CQSPI_REG_OP_EXT_STIG_LSB               0
 
 #define CQSPI_REG_PHY_CONFIG                    0xB4
 #define CQSPI_REG_PHY_CONFIG_RESYNC_FLD_MASK	0x80000000
@@ -244,19 +246,29 @@
 #define CQSPI_DMA_TIMEOUT                       10000000
 
 #define CQSPI_REG_IS_IDLE(base)				\
-	((readl(base + CQSPI_REG_CONFIG) >>		\
+	((readl((base) + CQSPI_REG_CONFIG) >>		\
 	CQSPI_REG_CONFIG_IDLE_LSB) & 0x1)
 
 #define CQSPI_GET_RD_SRAM_LEVEL(reg_base)		\
-	(((readl(reg_base + CQSPI_REG_SDRAMLEVEL)) >>	\
+	(((readl((reg_base) + CQSPI_REG_SDRAMLEVEL)) >>	\
 	CQSPI_REG_SDRAMLEVEL_RD_LSB) & CQSPI_REG_SDRAMLEVEL_RD_MASK)
 
 #define CQSPI_GET_WR_SRAM_LEVEL(reg_base)		\
-	(((readl(reg_base + CQSPI_REG_SDRAMLEVEL)) >>	\
+	(((readl((reg_base) + CQSPI_REG_SDRAMLEVEL)) >>	\
 	CQSPI_REG_SDRAMLEVEL_WR_LSB) & CQSPI_REG_SDRAMLEVEL_WR_MASK)
 
+/* Interrupt status bits */
+#define CQSPI_REG_IRQ_UNDERFLOW                 BIT(1)
+#define CQSPI_REG_IRQ_IND_COMP                  BIT(2)
+#define CQSPI_REG_IRQ_WATERMARK                 BIT(6)
+
+#define CQSPI_IRQ_MASK_WR			(CQSPI_REG_IRQ_IND_COMP        | \
+						CQSPI_REG_IRQ_WATERMARK        | \
+						CQSPI_REG_IRQ_UNDERFLOW)
+
+#define CQSPI_IRQ_STATUS_MASK			GENMASK(16, 0)
+
 struct cadence_spi_plat {
-	unsigned int	ref_clk_hz;
 	unsigned int	max_hz;
 	void		*regbase;
 	void		*ahbbase;
@@ -275,8 +287,8 @@ struct cadence_spi_plat {
 	u32		tsd2d_ns;
 	u32		tchsh_ns;
 	u32		tslch_ns;
-	bool		is_dma;
-	int		is_dual;
+
+	bool            is_dma;
 };
 
 struct cadence_spi_priv {
@@ -292,15 +304,15 @@ struct cadence_spi_priv {
 	u8		cmd_buf[32];
 	size_t		data_len;
 
-	int		is_dual;
 	int		qspi_is_init;
 	unsigned int    cs;
 	unsigned int	qspi_calibrated_hz;
 	unsigned int	qspi_calibrated_cs;
 	unsigned int	previous_hz;
 	u32		wr_delay;
+	int		read_delay;
 
-	struct reset_ctl_bulk resets;
+	struct reset_ctl_bulk *resets;
 	u32		page_size;
 	u32		block_size;
 	u32		tshsl_ns;
@@ -359,13 +371,16 @@ void cadence_qspi_apb_delay(void *reg_base,
 void cadence_qspi_apb_enter_xip(void *reg_base, char xip_dummy);
 void cadence_qspi_apb_readdata_capture(void *reg_base,
 	unsigned int bypass, unsigned int delay);
-int cadence_qspi_apb_dma_read(struct cadence_spi_priv *priv,
-			      unsigned int n_rx, u8 *rxbuf);
-int cadence_qspi_apb_exec_flash_cmd(void *reg_base, unsigned int reg);
-int cadence_qspi_apb_wait_for_dma_cmplt(struct cadence_spi_priv *priv);
-int cadence_spi_versal_flash_reset(struct udevice *dev);
-void cadence_qspi_apb_enable_linear_mode(bool enable);
 unsigned int cm_get_qspi_controller_clk_hz(void);
+int cadence_qspi_apb_dma_read(struct cadence_spi_priv *priv,
+			      const struct spi_mem_op *op);
+int cadence_qspi_apb_wait_for_dma_cmplt(struct cadence_spi_priv *priv);
+int cadence_qspi_apb_exec_flash_cmd(void *reg_base, unsigned int reg);
+int cadence_qspi_versal_flash_reset(struct udevice *dev);
+int cadence_qspi_versal_set_dll_mode(struct udevice *dev);
+void cadence_qspi_apb_enable_linear_mode(bool enable);
 int cadence_spi_versal_ctrl_reset(struct cadence_spi_priv *priv);
-
+int cadence_qspi_setup_opcode_ext(struct cadence_spi_priv *priv,
+				  const struct spi_mem_op *op,
+				  unsigned int shift);
 #endif /* __CADENCE_QSPI_H__ */

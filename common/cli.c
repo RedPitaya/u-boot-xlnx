@@ -8,6 +8,8 @@
  * JinHua Luo, GuangDong Linux Center, <luo.jinhua@gd-linux.com>
  */
 
+#define pr_fmt(fmt) "cli: %s: " fmt, __func__
+
 #include <common.h>
 #include <bootstage.h>
 #include <cli.h>
@@ -20,6 +22,7 @@
 #include <malloc.h>
 #include <asm/global_data.h>
 #include <dm/ofnode.h>
+#include <linux/errno.h>
 
 #ifdef CONFIG_CMDLINE
 /*
@@ -27,11 +30,11 @@
  *
  * @param cmd	Command to run
  * @param flag	Execution flags (CMD_FLAG_...)
- * @return 0 on success, or != 0 on error.
+ * Return: 0 on success, or != 0 on error.
  */
 int run_command(const char *cmd, int flag)
 {
-#if !CONFIG_IS_ENABLED(HUSH_PARSER)
+#if !IS_ENABLED(CONFIG_HUSH_PARSER)
 	/*
 	 * cli_run_command can return 0 or 1 for success, so clean up
 	 * its result.
@@ -54,7 +57,7 @@ int run_command(const char *cmd, int flag)
  *
  * @param cmd	Command to run
  * @param flag	Execution flags (CMD_FLAG_...)
- * @return 0 (not repeatable) or 1 (repeatable) on success, -1 on error.
+ * Return: 0 (not repeatable) or 1 (repeatable) on success, -1 on error.
  */
 int run_command_repeatable(const char *cmd, int flag)
 {
@@ -126,12 +129,37 @@ int run_command_list(const char *cmd, int len, int flag)
 	return rcode;
 }
 
+int run_commandf(const char *fmt, ...)
+{
+	va_list args;
+	int nbytes;
+
+	va_start(args, fmt);
+	/*
+	 * Limit the console_buffer space being used to CONFIG_SYS_CBSIZE,
+	 * because its last byte is used to fit the replacement of \0 by \n\0
+	 * in underlying hush parser
+	 */
+	nbytes = vsnprintf(console_buffer, CONFIG_SYS_CBSIZE, fmt, args);
+	va_end(args);
+
+	if (nbytes < 0) {
+		pr_debug("I/O internal error occurred.\n");
+		return -EIO;
+	} else if (nbytes >= CONFIG_SYS_CBSIZE) {
+		pr_debug("'fmt' size:%d exceeds the limit(%d)\n",
+			 nbytes, CONFIG_SYS_CBSIZE);
+		return -ENOSPC;
+	}
+	return run_command(console_buffer, 0);
+}
+
 /****************************************************************************/
 
 #if defined(CONFIG_CMD_RUN)
 int do_run(struct cmd_tbl *cmdtp, int flag, int argc, char *const argv[])
 {
-	int i;
+	int i, ret;
 
 	if (argc < 2)
 		return CMD_RET_USAGE;
@@ -145,8 +173,9 @@ int do_run(struct cmd_tbl *cmdtp, int flag, int argc, char *const argv[])
 			return 1;
 		}
 
-		if (run_command(arg, flag | CMD_FLAG_ENV) != 0)
-			return 1;
+		ret = run_command(arg, flag | CMD_FLAG_ENV);
+		if (ret)
+			return ret;
 	}
 	return 0;
 }

@@ -10,12 +10,9 @@
  * header files
  */
 
-#include <common.h>
 #include <config.h>
 #include <env.h>
 #include <init.h>
-#include <image.h>
-#include <lmb.h>
 #include <log.h>
 #include <asm/global_data.h>
 #include <dm/lists.h>
@@ -37,25 +34,6 @@ int dram_init(void)
 
 	return 0;
 };
-
-ulong board_get_usable_ram_top(ulong total_size)
-{
-	phys_size_t size;
-	phys_addr_t reg;
-	struct lmb lmb;
-
-	/* found enough not-reserved memory to relocated U-Boot */
-	lmb_init(&lmb);
-	lmb_add(&lmb, gd->ram_base, gd->ram_size);
-	boot_fdt_add_mem_rsv_regions(&lmb, (void *)gd->fdt_blob);
-	size = ALIGN(CONFIG_SYS_MALLOC_LEN + total_size, MMU_SECTION_SIZE);
-	reg = lmb_alloc(&lmb, size, MMU_SECTION_SIZE);
-
-	if (!reg)
-		reg = gd->ram_top - size;
-
-	return reg + size;
-}
 
 int board_late_init(void)
 {
@@ -79,7 +57,7 @@ int board_late_init(void)
 	max_size = gd->start_addr_sp - CONFIG_STACK_SIZE;
 	max_size = round_down(max_size, SZ_16M);
 
-	status |= env_set_hex("scriptaddr", max_size + SZ_2M);
+	status |= env_set_hex("scriptaddr", (max_size - gd->ram_base) + SZ_2M);
 
 	status |= env_set_hex("pxefile_addr_r", max_size + SZ_1M);
 

@@ -9,12 +9,12 @@
 	};
 
 	soc {
-		u-boot,dm-pre-reloc;
+		bootph-all;
 	};
 };
 
 &cpg {
-	u-boot,dm-pre-reloc;
+	bootph-all;
 };
 
 &ehci0 {
@@ -26,19 +26,27 @@
 };
 
 &extal_clk {
-	u-boot,dm-pre-reloc;
+	bootph-all;
 };
 
 &extalr_clk {
-	u-boot,dm-pre-reloc;
+	bootph-all;
+};
+
+&pfc {
+	qspi_pins: qspi {
+		groups = "qspi_ctrl", "qspi_data4";
+		function = "qspi";
+	};
 };
 
 &prr {
-	u-boot,dm-pre-reloc;
+	bootph-all;
 };
 
 &rpc {
-	compatible = "renesas,rcar-gen3-rpc";
+	pinctrl-0 = <&qspi_pins>;
+	pinctrl-names = "default";
 	num-cs = <1>;
 	spi-max-frequency = <40000000>;
 	#address-cells = <1>;

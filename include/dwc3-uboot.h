@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /* include/dwc3-uboot.h
  *
- * Copyright (c) 2015 Texas Instruments Incorporated - http://www.ti.com
+ * Copyright (c) 2015 Texas Instruments Incorporated - https://www.ti.com
  *
  * Designware SuperSpeed USB uboot init
  */
@@ -39,12 +39,13 @@ struct dwc3_device {
 	unsigned dis_u2_freeclk_exists_quirk;
 	unsigned tx_de_emphasis_quirk;
 	unsigned tx_de_emphasis;
+	unsigned ulpi_ext_vbus_drv;
 	int index;
 };
 
 int dwc3_uboot_init(struct dwc3_device *dev);
 void dwc3_uboot_exit(int index);
-void dwc3_uboot_handle_interrupt(int index);
+void dwc3_uboot_handle_interrupt(struct udevice *dev);
 
 struct phy;
 #if CONFIG_IS_ENABLED(PHY) && CONFIG_IS_ENABLED(DM_USB)

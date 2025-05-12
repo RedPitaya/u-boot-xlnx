@@ -264,7 +264,7 @@ static const struct dm_gpio_ops gpio_tegra_ops = {
  * GPIOs are named A, B, C, ..., Z, AA, BB, CC, ...
  *
  * @base_port: Base port number (0, 1..n-1)
- * @return allocated string containing the name
+ * Return: allocated string containing the name
  */
 static char *gpio_port_name(int base_port)
 {
@@ -339,8 +339,8 @@ static int gpio_tegra_bind(struct udevice *parent)
 	if (len < 0)
 		return len;
 	bank_count = len / 3 / sizeof(u32);
-	ctlr = (struct gpio_ctlr *)dev_read_addr(parent);
-	if ((ulong)ctlr == FDT_ADDR_T_NONE)
+	ctlr = dev_read_addr_ptr(parent);
+	if (!ctlr)
 		return -EINVAL;
 	}
 #endif

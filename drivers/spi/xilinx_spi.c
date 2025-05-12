@@ -112,10 +112,9 @@ struct xilinx_spi_priv {
 static int xilinx_spi_probe(struct udevice *bus)
 {
 	struct xilinx_spi_priv *priv = dev_get_priv(bus);
-	struct xilinx_spi_regs *regs = priv->regs;
+	struct xilinx_spi_regs *regs;
 
-	priv->regs = (struct xilinx_spi_regs *)dev_read_addr(bus);
-
+	regs = priv->regs = dev_read_addr_ptr(bus);
 	priv->fifo_depth = dev_read_u32_default(bus, "fifo-size", 0);
 
 	writel(SPISSR_RESET_VALUE, &regs->srr);
@@ -271,7 +270,7 @@ static void xilinx_spi_startup_block(struct spi_slave *spi)
 	 * Perform a dummy read as a work around for
 	 * the startup block issue.
 	 */
-	spi_cs_activate(spi->dev, slave_plat->cs);
+	spi_cs_activate(spi->dev, slave_plat->cs[0]);
 	txp = 0x9f;
 	start_transfer(spi, (void *)&txp, NULL, 1);
 
@@ -299,7 +298,7 @@ static int xilinx_spi_mem_exec_op(struct spi_slave *spi,
 		startup++;
 	}
 
-	spi_cs_activate(spi->dev, slave_plat->cs);
+	spi_cs_activate(spi->dev, slave_plat->cs[0]);
 
 	if (op->cmd.opcode) {
 		ret = start_transfer(spi, (void *)&op->cmd.opcode, NULL, 1);
@@ -364,8 +363,8 @@ static int xilinx_qspi_check_buswidth(struct spi_slave *slave, u8 width)
 	return -EOPNOTSUPP;
 }
 
-bool xilinx_qspi_mem_exec_op(struct spi_slave *slave,
-			     const struct spi_mem_op *op)
+static bool xilinx_qspi_mem_exec_op(struct spi_slave *slave,
+				    const struct spi_mem_op *op)
 {
 	if (xilinx_qspi_check_buswidth(slave, op->cmd.buswidth))
 		return false;
