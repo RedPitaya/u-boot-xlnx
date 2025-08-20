@@ -52,6 +52,7 @@
     "fdt_high=0x20000000\0" \
     "initrd_high=0x20000000\0" \
     "sdboot=echo Running script from SD... && mmcinfo && fatload mmc 0 0x2000000 u-boot.scr && source 0x2000000\0" \
+    "qspiboot=echo Running script from QSPI... && mmcinfo && fatload mmc 0 0x2000000 u-boot.scr && source 0x2000000\0" \
     "ethaddr=88:88:88:88:88:88\0" \
     "nav_code=0\0" \
     "hw_rev=0\0" \
