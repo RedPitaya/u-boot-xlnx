@@ -5,11 +5,11 @@
 
 #define LOG_CATEGORY	UCLASS_SYSINFO
 
-#include <common.h>
 #include <bloblist.h>
 #include <command.h>
 #include <cros_ec.h>
 #include <dm.h>
+#include <event.h>
 #include <init.h>
 #include <log.h>
 #include <sysinfo.h>
@@ -32,11 +32,12 @@ struct cros_gpio_info {
 	int flags;
 };
 
-int misc_init_f(void)
+static int coral_check_ll_boot(void)
 {
 	if (!ll_boot_init()) {
 		printf("Running as secondary loader");
-		if (gd->arch.coreboot_table) {
+		if (CONFIG_IS_ENABLED(COREBOOT_SYSINFO) &&
+		    gd->arch.coreboot_table) {
 			int ret;
 
 			printf(" (found coreboot table at %lx)",
@@ -55,6 +56,7 @@ int misc_init_f(void)
 
 	return 0;
 }
+EVENT_SPY_SIMPLE(EVT_MISC_INIT_F, coral_check_ll_boot);
 
 int arch_misc_init(void)
 {
@@ -98,7 +100,7 @@ static int get_memconfig(struct udevice *dev)
  *     EC              - reading from the EC (backup)
  *
  * @dev: sysinfo device to use
- * @return SKU ID, or -ve error if not found
+ * Return: SKU ID, or -ve error if not found
  */
 static int get_skuconfig(struct udevice *dev)
 {
@@ -145,7 +147,7 @@ static int coral_get_str(struct udevice *dev, int id, size_t size, char *val)
 {
 	int ret;
 
-	if (IS_ENABLED(CONFIG_SPL_BUILD))
+	if (IS_ENABLED(CONFIG_XPL_BUILD))
 		return -ENOSYS;
 
 	switch (id) {

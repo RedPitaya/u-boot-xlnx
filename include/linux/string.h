@@ -14,7 +14,6 @@ extern char * strtok(char *,const char *);
 extern char * strsep(char **,const char *);
 extern __kernel_size_t strspn(const char *,const char *);
 
-
 /*
  * Include machine specific inline routines
  */
@@ -62,7 +61,7 @@ extern char * strchr(const char *,int);
  * NULL
  * @s: string to search
  * @c: character to search for
- * @return position of @c in @s, or end of @s if not found
+ * Return: position of @c in @s, or end of @s if not found
  */
 const char *strchrnul(const char *s, int c);
 
@@ -89,7 +88,7 @@ extern __kernel_size_t strnlen(const char *,__kernel_size_t);
  *
  * @s: string to search
  * @reject: strings which cause the search to halt
- * @return number of characters at the start of @s which are not in @reject
+ * Return: number of characters at the start of @s which are not in @reject
  */
 size_t strcspn(const char *s, const char *reject);
 #endif
@@ -136,7 +135,7 @@ void *memchr_inv(const void *, int, size_t);
  *
  * @src: data to copy in
  * @len: number of bytes to copy
- * @return allocated buffer with the copied contents, or NULL if not enough
+ * Return: allocated buffer with the copied contents, or NULL if not enough
  *	memory is available
  *
  */

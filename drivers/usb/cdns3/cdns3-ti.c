@@ -2,11 +2,9 @@
 /**
  * cdns_ti-ti.c - TI specific Glue layer for Cadence USB Controller
  *
- * Copyright (C) 2019 Texas Instruments Incorporated - http://www.ti.com
+ * Copyright (C) 2019 Texas Instruments Incorporated - https://www.ti.com
  */
 
-#include <common.h>
-#include <asm-generic/io.h>
 #include <clk.h>
 #include <dm.h>
 #include <dm/device_compat.h>
@@ -180,6 +178,7 @@ static int cdns_ti_remove(struct udevice *dev)
 
 static const struct udevice_id cdns_ti_of_match[] = {
 	{ .compatible = "ti,j721e-usb", },
+	{ .compatible = "ti,am64-usb", },
 	{},
 };
 

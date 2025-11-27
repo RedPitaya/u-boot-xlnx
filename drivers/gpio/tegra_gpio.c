@@ -10,7 +10,6 @@
  * Tom Warren (twarren@nvidia.com)
  */
 
-#include <common.h>
 #include <dm.h>
 #include <log.h>
 #include <malloc.h>
@@ -258,13 +257,63 @@ static const struct dm_gpio_ops gpio_tegra_ops = {
 	.xlate			= tegra_gpio_xlate,
 };
 
+/*
+ * SPL GPIO functions.
+ */
+int spl_gpio_output(void *regs, uint gpio, int value)
+{
+	/* Configure GPIO output value. */
+	set_level(gpio, value);
+
+	/* Configure GPIO direction as output. */
+	set_direction(gpio, DIRECTION_OUTPUT);
+
+	/* Enable the pin as a GPIO */
+	set_config(gpio, 1);
+
+	return 0;
+}
+
+int spl_gpio_input(void *regs, uint gpio)
+{
+	/* Configure GPIO direction as input. */
+	set_direction(gpio, DIRECTION_INPUT);
+
+	/* Enable the pin as a GPIO */
+	set_config(gpio, 1);
+
+	return 0;
+}
+
+int spl_gpio_get_value(void *regs, uint gpio)
+{
+	struct gpio_ctlr *ctlr = (struct gpio_ctlr *)NV_PA_GPIO_BASE;
+	struct gpio_ctlr_bank *bank = &ctlr->gpio_bank[GPIO_BANK(gpio)];
+	int val;
+
+	if (get_direction(gpio) == DIRECTION_INPUT)
+		val = readl(&bank->gpio_in[GPIO_PORT(gpio)]);
+	else
+		val = readl(&bank->gpio_out[GPIO_PORT(gpio)]);
+
+	return (val >> GPIO_BIT(gpio)) & 1;
+}
+
+int spl_gpio_set_value(void *regs, uint gpio, int value)
+{
+	/* Configure GPIO output value. */
+	set_level(gpio, value);
+
+	return 0;
+}
+
 /**
  * Returns the name of a GPIO port
  *
  * GPIOs are named A, B, C, ..., Z, AA, BB, CC, ...
  *
  * @base_port: Base port number (0, 1..n-1)
- * @return allocated string containing the name
+ * Return: allocated string containing the name
  */
 static char *gpio_port_name(int base_port)
 {
@@ -324,7 +373,7 @@ static int gpio_tegra_bind(struct udevice *parent)
 		return 0;
 
 	/* TODO(sjg@chromium.org): Remove once SPL supports device tree */
-#ifdef CONFIG_SPL_BUILD
+#ifdef CONFIG_XPL_BUILD
 	ctlr = (struct gpio_ctlr *)NV_PA_GPIO_BASE;
 	bank_count = TEGRA_GPIO_BANKS;
 #else
@@ -339,8 +388,8 @@ static int gpio_tegra_bind(struct udevice *parent)
 	if (len < 0)
 		return len;
 	bank_count = len / 3 / sizeof(u32);
-	ctlr = (struct gpio_ctlr *)dev_read_addr(parent);
-	if ((ulong)ctlr == FDT_ADDR_T_NONE)
+	ctlr = dev_read_addr_ptr(parent);
+	if (!ctlr)
 		return -EINVAL;
 	}
 #endif

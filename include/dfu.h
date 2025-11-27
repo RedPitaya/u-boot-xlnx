@@ -10,7 +10,7 @@
 #ifndef __DFU_ENTITY_H_
 #define __DFU_ENTITY_H_
 
-#include <common.h>
+#include <linux/errno.h>
 #include <linux/list.h>
 #include <mmc.h>
 #include <spi_flash.h>
@@ -24,6 +24,7 @@ enum dfu_device_type {
 	DFU_DEV_SF,
 	DFU_DEV_MTD,
 	DFU_DEV_VIRT,
+	DFU_DEV_SCSI,
 };
 
 enum dfu_layout {
@@ -99,7 +100,24 @@ struct virt_internal_data {
 	int dev_num;
 };
 
+struct scsi_internal_data {
+	int lun;
+
+	/* RAW programming */
+	unsigned int lba_start;
+	unsigned int lba_size;
+	unsigned int lba_blk_size;
+
+	/* FAT/EXT */
+	unsigned int dev; // Always 0???
+	unsigned int part;
+};
+
+#if defined(CONFIG_DFU_NAME_MAX_SIZE)
+#define DFU_NAME_SIZE			CONFIG_DFU_NAME_MAX_SIZE
+#else
 #define DFU_NAME_SIZE			32
+#endif
 #ifndef DFU_DEFAULT_POLL_TIMEOUT
 #define DFU_DEFAULT_POLL_TIMEOUT 0
 #endif
@@ -122,6 +140,7 @@ struct dfu_entity {
 		struct ram_internal_data ram;
 		struct sf_internal_data sf;
 		struct virt_internal_data virt;
+		struct scsi_internal_data scsi;
 	} data;
 
 	int (*get_medium_size)(struct dfu_entity *dfu, u64 *size);
@@ -432,11 +451,15 @@ static inline void dfu_set_defer_flush(struct dfu_entity *dfu)
 int dfu_write_from_mem_addr(struct dfu_entity *dfu, void *buf, int size);
 
 /* Device specific */
+/* Each entity has 5 arguments in maximum. */
+#define DFU_MAX_ENTITY_ARGS	5
+
 #if CONFIG_IS_ENABLED(DFU_MMC)
-extern int dfu_fill_entity_mmc(struct dfu_entity *dfu, char *devstr, char *s);
+extern int dfu_fill_entity_mmc(struct dfu_entity *dfu, char *devstr,
+			       char **argv, int argc);
 #else
 static inline int dfu_fill_entity_mmc(struct dfu_entity *dfu, char *devstr,
-				      char *s)
+				      char **argv, int argc)
 {
 	puts("MMC support not available!\n");
 	return -1;
@@ -444,10 +467,11 @@ static inline int dfu_fill_entity_mmc(struct dfu_entity *dfu, char *devstr,
 #endif
 
 #if CONFIG_IS_ENABLED(DFU_NAND)
-extern int dfu_fill_entity_nand(struct dfu_entity *dfu, char *devstr, char *s);
+extern int dfu_fill_entity_nand(struct dfu_entity *dfu, char *devstr,
+				char **argv, int argc);
 #else
 static inline int dfu_fill_entity_nand(struct dfu_entity *dfu, char *devstr,
-				       char *s)
+				       char **argv, int argc)
 {
 	puts("NAND support not available!\n");
 	return -1;
@@ -455,10 +479,11 @@ static inline int dfu_fill_entity_nand(struct dfu_entity *dfu, char *devstr,
 #endif
 
 #if CONFIG_IS_ENABLED(DFU_RAM)
-extern int dfu_fill_entity_ram(struct dfu_entity *dfu, char *devstr, char *s);
+extern int dfu_fill_entity_ram(struct dfu_entity *dfu, char *devstr,
+			       char **argv, int argc);
 #else
 static inline int dfu_fill_entity_ram(struct dfu_entity *dfu, char *devstr,
-				      char *s)
+				      char **argv, int argc)
 {
 	puts("RAM support not available!\n");
 	return -1;
@@ -466,10 +491,11 @@ static inline int dfu_fill_entity_ram(struct dfu_entity *dfu, char *devstr,
 #endif
 
 #if CONFIG_IS_ENABLED(DFU_SF)
-extern int dfu_fill_entity_sf(struct dfu_entity *dfu, char *devstr, char *s);
+extern int dfu_fill_entity_sf(struct dfu_entity *dfu, char *devstr,
+			      char **argv, int argc);
 #else
 static inline int dfu_fill_entity_sf(struct dfu_entity *dfu, char *devstr,
-				     char *s)
+				     char **argv, int argc)
 {
 	puts("SF support not available!\n");
 	return -1;
@@ -477,18 +503,20 @@ static inline int dfu_fill_entity_sf(struct dfu_entity *dfu, char *devstr,
 #endif
 
 #if CONFIG_IS_ENABLED(DFU_MTD)
-int dfu_fill_entity_mtd(struct dfu_entity *dfu, char *devstr, char *s);
+extern int dfu_fill_entity_mtd(struct dfu_entity *dfu, char *devstr,
+			       char **argv, int argc);
 #else
 static inline int dfu_fill_entity_mtd(struct dfu_entity *dfu, char *devstr,
-				      char *s)
+				      char **argv, int argc)
 {
 	puts("MTD support not available!\n");
 	return -1;
 }
 #endif
 
-#ifdef CONFIG_DFU_VIRT
-int dfu_fill_entity_virt(struct dfu_entity *dfu, char *devstr, char *s);
+#if CONFIG_IS_ENABLED(DFU_VIRT)
+int dfu_fill_entity_virt(struct dfu_entity *dfu, char *devstr,
+			 char **argv, int argc);
 int dfu_write_medium_virt(struct dfu_entity *dfu, u64 offset,
 			  void *buf, long *len);
 int dfu_get_medium_size_virt(struct dfu_entity *dfu, u64 *size);
@@ -496,14 +524,27 @@ int dfu_read_medium_virt(struct dfu_entity *dfu, u64 offset,
 			 void *buf, long *len);
 #else
 static inline int dfu_fill_entity_virt(struct dfu_entity *dfu, char *devstr,
-				       char *s)
+				       char **argv, int argc)
 {
 	puts("VIRT support not available!\n");
 	return -1;
 }
 #endif
 
+#if CONFIG_IS_ENABLED(DFU_SCSI)
+int dfu_fill_entity_scsi(struct dfu_entity *dfu, char *devstr,
+			 char **argv, int argc);
+#else
+static inline int dfu_fill_entity_scsi(struct dfu_entity *dfu, char *devstr,
+				       char **argv, int argc)
+{
+	puts("SCSI support not available!\n");
+	return -1;
+}
+#endif
+
 extern bool dfu_reinit_needed;
+extern bool dfu_alt_info_changed;
 
 #if CONFIG_IS_ENABLED(DFU_WRITE_ALT)
 /**

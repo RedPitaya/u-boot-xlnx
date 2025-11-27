@@ -45,7 +45,7 @@ int is_core_valid(unsigned int core);
  * This is used on PowerPC, SH and X86 machines as a CPU init mechanism. It is
  * called during the pre-relocation init sequence in board_init_f().
  *
- * @return 0 if oK, -ve on error
+ * Return: 0 if oK, -ve on error
  */
 int checkcpu(void);
 
@@ -69,6 +69,20 @@ void flush_dcache_range(unsigned long start, unsigned long stop);
 void invalidate_dcache_range(unsigned long start, unsigned long stop);
 void invalidate_dcache_all(void);
 void invalidate_icache_all(void);
+/**
+ * noncached_init() - Initialize non-cached memory region
+ *
+ * Initialize non-cached memory area. This memory region will be typically
+ * located right below the malloc() area and mapped uncached in the MMU.
+ *
+ * It is called during the generic post-relocation init sequence.
+ *
+ * Return: 0 if OK
+ */
+int noncached_init(void);
+void noncached_set_region(void);
+
+phys_addr_t noncached_alloc(size_t size, size_t align);
 
 enum {
 	/* Disable caches (else flush caches but leave them active) */

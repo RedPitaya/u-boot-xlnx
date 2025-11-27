@@ -8,6 +8,8 @@
 #ifndef _ZYNQMP_FIRMWARE_H_
 #define _ZYNQMP_FIRMWARE_H_
 
+#include <compiler.h>
+
 enum pm_api_id {
 	PM_GET_API_VERSION = 1,
 	PM_SET_CONFIGURATION = 2,
@@ -35,7 +37,7 @@ enum pm_api_id {
 	PM_FPGA_LOAD = 22,
 	PM_FPGA_GET_STATUS = 23,
 	PM_GET_CHIPID = 24,
-	/* ID 25 is been used by U-boot to process secure boot images */
+	/* ID 25 is been used by U-Boot to process secure boot images */
 	/* Secure library generic API functions */
 	PM_SECURE_SHA = 26,
 	PM_SECURE_RSA = 27,
@@ -158,6 +160,12 @@ enum dll_reset_type {
 	PM_DLL_RESET_ASSERT = 0,
 	PM_DLL_RESET_RELEASE = 1,
 	PM_DLL_RESET_PULSE = 2,
+};
+
+enum ospi_mux_select_type {
+	PM_OSPI_MUX_SEL_DMA,
+	PM_OSPI_MUX_SEL_LINEAR,
+	PM_OSPI_MUX_GET_MODE,
 };
 
 enum pm_query_id {
@@ -401,12 +409,6 @@ enum pm_ioctl_id {
 	IOCTL_GET_QOS = 34,
 };
 
-enum ospi_mux_select_type {
-	PM_OSPI_MUX_SEL_DMA,
-	PM_OSPI_MUX_SEL_LINEAR,
-	PM_OSPI_MUX_GET_MODE,
-};
-
 enum pm_sd_config_type {
 	SD_CONFIG_EMMC_SEL = 1,	/* To set SD_EMMC_SEL in CTRL_REG_SD */
 	SD_CONFIG_BASECLK = 2,	/* To set SD_BASECLK in SD_CONFIG_REG1 */
@@ -433,28 +435,37 @@ enum pm_gem_config_type {
 #define ZYNQMP_PM_VERSION_INVALID	~0
 
 #define PMUFW_V1_0	((1 << ZYNQMP_PM_VERSION_MAJOR_SHIFT) | 0)
-
 #define PMIO_NODE_ID_BASE		0x1410801B
 
 /*
  * Return payload size
  * Not every firmware call expects the same amount of return bytes, however the
- * firmware driver always copies 5 bytes from RX buffer to the ret_payload
+ * firmware driver always copies 7 words from RX buffer to the ret_payload
  * buffer. Therefore allocating with this defined value is recommended to avoid
  * overflows.
  */
-#define PAYLOAD_ARG_CNT	5U
+#define PAYLOAD_ARG_CNT	7U
 
 unsigned int zynqmp_firmware_version(void);
 int zynqmp_pmufw_node(u32 id);
 int zynqmp_pmufw_config_close(void);
 int zynqmp_pmufw_load_config_object(const void *cfg_obj, size_t size);
 int xilinx_pm_request(u32 api_id, u32 arg0, u32 arg1, u32 arg2,
-		      u32 arg3, u32 *ret_payload);
+		      u32 arg3, u32 arg4, u32 arg5, u32 *ret_payload);
 int zynqmp_pm_set_sd_config(u32 node, enum pm_sd_config_type config, u32 value);
 int zynqmp_pm_set_gem_config(u32 node, enum pm_gem_config_type config,
 			     u32 value);
 int zynqmp_pm_is_function_supported(const u32 api_id, const u32 id);
+int zynqmp_mmio_read(const u32 address, u32 *value);
+int zynqmp_mmio_write(const u32 address, const u32 mask, const u32 value);
+int zynqmp_pm_feature(const u32 api_id);
+u32 zynqmp_pm_get_bootmode_reg(void);
+u32 zynqmp_pm_get_pmc_multi_boot_reg(void);
+int zynqmp_pm_ufs_get_txrx_cfgrdy(u32 *value);
+int zynqmp_pm_ufs_sram_csr_read(u32 *value);
+int zynqmp_pm_ufs_sram_csr_write(u32 *value);
+int zynqmp_pm_ufs_cal_reg(u32 *value);
+u32 zynqmp_pm_get_pmc_global_pggs_reg(u32 reg_addr);
 
 /* Type of Config Object */
 #define PM_CONFIG_OBJECT_TYPE_BASE	0x1U
@@ -491,9 +502,39 @@ enum zynqmp_pm_request_ack {
 /* PM API versions */
 #define PM_API_VERSION_2		2
 
+#define PM_PINCTRL_PARAM_SET_VERSION	2
+
 struct zynqmp_ipi_msg {
 	size_t len;
 	u32 *buf;
 };
+
+#define __data __section(".data")
+
+typedef int (*smc_call_handler_t)(u32 api_id, u32 arg0, u32 arg1, u32 arg2,
+				  u32 arg3, u32 arg4, u32 arg5, u32 *ret_payload);
+
+extern smc_call_handler_t __data smc_call_handler;
+
+#define PM_MODULE_ID		2
+
+#define PASS_THROUGH_FW_CMD_ID	GENMASK(11, 0)
+#define PLM_MODULE_ID_MASK	GENMASK(15, 8)
+#define API_ID_MASK		GENMASK(7, 0)
+
+#define CRP_BOOT_MODE_REG_NODE		0x30000001
+#define CRP_BOOT_MODE_REG_OFFSET	0x200
+
+#define PM_REG_PMC_GLOBAL_NODE	0x30000004
+#define PMC_MULTI_BOOT_MODE_REG_OFFSET	0x4
+
+#define PMC_GLOBAL_PGGS3_REG_NODE	0x1824C005
+
+#define PM_REGNODE_PMC_IOU_SLCR		0x30000002
+#define PM_REGNODE_EFUSE_CACHE		0x30000003
+
+#define SRAM_CSR_OFFSET			0x104C
+#define TXRX_CFGRDY_OFFSET		0x1054
+#define UFS_CAL_1_OFFSET		0xBE8
 
 #endif /* _ZYNQMP_FIRMWARE_H_ */

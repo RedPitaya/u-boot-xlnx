@@ -3,7 +3,7 @@
  * Copyright (C) 2019-20 Sean Anderson <seanga2@gmail.com>
  */
 
-#include <common.h>
+#include <config.h>
 #include <clk.h>
 #include <dm.h>
 #include <fdt_support.h>
@@ -11,7 +11,7 @@
 
 phys_size_t get_effective_memsize(void)
 {
-	return CONFIG_SYS_SDRAM_SIZE;
+	return CFG_SYS_SDRAM_SIZE;
 }
 
 static int sram_init(void)
@@ -22,7 +22,7 @@ static int sram_init(void)
 	struct clk clk;
 
 	/* Enable RAM clocks */
-	memory = ofnode_by_compatible(ofnode_null(), "kendryte,k210-sram");
+	memory = ofnode_by_compatible(ofnode_null(), "canaan,k210-sram");
 	if (ofnode_equal(memory, ofnode_null()))
 		return -ENOENT;
 
@@ -32,7 +32,6 @@ static int sram_init(void)
 			continue;
 
 		ret = clk_enable(&clk);
-		clk_free(&clk);
 		if (ret)
 			return ret;
 	}

@@ -9,7 +9,6 @@
  * Copyright (C) Nalin Dahyabhai <bigfun@pobox.com>
  */
 
-#include <common.h>
 #include <edid.h>
 #include <errno.h>
 #include <fdtdec.h>
@@ -139,7 +138,7 @@ static void decode_timing(u8 *buf, struct display_timing *timing)
 /**
  * Check if HDMI vendor specific data block is present in CEA block
  * @param info	CEA extension block
- * @return true if block is found
+ * Return: true if block is found
  */
 static bool cea_is_hdmi_vsdb_present(struct edid_cea861_info *info)
 {
@@ -269,12 +268,11 @@ int edid_get_timing(u8 *buf, int buf_size, struct display_timing *timing,
 					panel_bits_per_colourp, NULL, NULL);
 }
 
-
 /**
  * Snip the tailing whitespace/return of a string.
  *
  * @param string	The string to be snipped
- * @return the snipped string
+ * Return: the snipped string
  */
 static char *snip(char *string)
 {

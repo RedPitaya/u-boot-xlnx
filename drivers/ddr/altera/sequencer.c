@@ -3,8 +3,8 @@
  * Copyright Altera Corporation (C) 2012-2015
  */
 
-#include <common.h>
 #include <log.h>
+#include <linux/string.h>
 #include <asm/io.h>
 #include <asm/arch/sdram.h>
 #include <errno.h>
@@ -688,7 +688,6 @@ static void scc_mgr_apply_group_dm_out1_delay(struct socfpga_sdrseq *seq,
 		scc_mgr_load_dm(i);
 	}
 }
-
 
 /* apply and load delay on both DQS and OCT out1 */
 static void scc_mgr_apply_group_dqs_io_and_oct_out1(struct socfpga_sdrseq *seq,
@@ -2580,7 +2579,6 @@ static int rw_mgr_mem_calibrate_vfifo_center(struct socfpga_sdrseq *seq,
 			 &sticky_bit_chk,
 			 left_edge, right_edge, use_read_test);
 
-
 	/* Search for the right edge of the window for each bit */
 	ret = search_right_edge(seq, 0, rank_bgn, rw_group, rw_group,
 				start_dqs, start_dqs_en,
@@ -2770,7 +2768,7 @@ rw_mgr_mem_calibrate_dqs_enable_calibration(struct socfpga_sdrseq *seq,
 	ret = rw_mgr_mem_calibrate_vfifo_find_dqs_en_phase(seq, rw_group);
 
 	debug_cond(DLEVEL >= 1,
-		   "%s:%d: g=%u found=%u; Reseting delay chain to zero\n",
+		   "%s:%d: g=%u found=%u; Resetting delay chain to zero\n",
 		   __func__, __LINE__, rw_group, !ret);
 
 	for (r = 0; r < seq->rwcfg->mem_number_of_ranks;

@@ -56,6 +56,13 @@ struct crypto_algo crypto_algos[] = {
 		.verify = rsa_verify,
 	},
 	{
+		.name = "rsa3072",
+		.key_len = RSA3072_BYTES,
+		.sign = rsa_sign,
+		.add_verify_data = rsa_add_verify_data,
+		.verify = rsa_verify,
+	},
+	{
 		.name = "rsa4096",
 		.key_len = RSA4096_BYTES,
 		.sign = rsa_sign,
@@ -65,6 +72,20 @@ struct crypto_algo crypto_algos[] = {
 	{
 		.name = "ecdsa256",
 		.key_len = ECDSA256_BYTES,
+		.sign = ecdsa_sign,
+		.add_verify_data = ecdsa_add_verify_data,
+		.verify = ecdsa_verify,
+	},
+	{
+		.name = "ecdsa384",
+		.key_len = ECDSA384_BYTES,
+		.sign = ecdsa_sign,
+		.add_verify_data = ecdsa_add_verify_data,
+		.verify = ecdsa_verify,
+	},
+	{
+		.name = "secp521r1",
+		.key_len = ECDSA521_BYTES,
 		.sign = ecdsa_sign,
 		.add_verify_data = ecdsa_add_verify_data,
 		.verify = ecdsa_verify,

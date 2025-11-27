@@ -4,11 +4,11 @@
  * David Feng <fenghua@phytium.com.cn>
  */
 
-#include <common.h>
 #include <bootstage.h>
 #include <command.h>
 #include <time.h>
 #include <asm/global_data.h>
+#include <asm/io.h>
 #include <asm/system.h>
 #include <linux/bitops.h>
 
@@ -17,14 +17,38 @@ DECLARE_GLOBAL_DATA_PTR;
 /*
  * Generic timer implementation of get_tbclk()
  */
-unsigned long get_tbclk(void)
+unsigned long notrace get_tbclk(void)
 {
 	unsigned long cntfrq;
 	asm volatile("mrs %0, cntfrq_el0" : "=r" (cntfrq));
 	return cntfrq;
 }
 
-#ifdef CONFIG_SYS_FSL_ERRATUM_A008585
+#ifdef CONFIG_ARCH_VERSAL2
+
+#define VERSAL2_TIMESTAMP_GEN_COUNTER		0xEC920008
+
+unsigned long timer_read_counter(void)
+{
+	u32 upper0, upper1, lower;
+
+read_again:
+	isb();
+	upper0 = readl(VERSAL2_TIMESTAMP_GEN_COUNTER + 0x4);
+
+	isb();
+	lower = readl(VERSAL2_TIMESTAMP_GEN_COUNTER);
+
+	isb();
+	upper1 = readl(VERSAL2_TIMESTAMP_GEN_COUNTER + 0x4);
+
+	if (upper0 != upper1)
+		goto read_again;
+
+	return ((unsigned long)upper1 << 32 | lower);
+}
+
+#elif CONFIG_SYS_FSL_ERRATUM_A008585
 /*
  * FSL erratum A-008585 says that the ARM generic timer counter "has the
  * potential to contain an erroneous value for a small number of core
@@ -78,7 +102,7 @@ unsigned long timer_read_counter(void)
 /*
  * timer_read_counter() using the Arm Generic Timer (aka arch timer).
  */
-unsigned long timer_read_counter(void)
+unsigned long notrace timer_read_counter(void)
 {
 	unsigned long cntpct;
 
@@ -89,7 +113,7 @@ unsigned long timer_read_counter(void)
 }
 #endif
 
-uint64_t get_ticks(void)
+uint64_t notrace get_ticks(void)
 {
 	unsigned long ticks = timer_read_counter();
 
@@ -115,3 +139,30 @@ ulong timer_get_boot_us(void)
 
 	return val / get_tbclk();
 }
+
+#if CONFIG_IS_ENABLED(ARMV8_UDELAY_EVENT_STREAM)
+void __udelay(unsigned long usec)
+{
+	u64 target = get_ticks() + usec_to_tick(usec);
+
+	/* At EL2 or above, use the event stream to avoid polling CNTPCT_EL0 so often */
+	if (current_el() >= 2) {
+		u32 cnthctl_val;
+		const u8 event_period = 0x7;
+
+		asm volatile("mrs %0, cnthctl_el2" : "=r" (cnthctl_val));
+		asm volatile("msr cnthctl_el2, %0" : : "r"
+			(cnthctl_val | CNTHCTL_EL2_EVNT_EN | CNTHCTL_EL2_EVNT_I(event_period)));
+
+		while (get_ticks() + (1ULL << event_period) <= target)
+			wfe();
+
+		/* Reset the event stream */
+		asm volatile("msr cnthctl_el2, %0" : : "r" (cnthctl_val));
+	}
+
+	/* Fall back to polling CNTPCT_EL0 */
+	while (get_ticks() <= target)
+		;
+}
+#endif

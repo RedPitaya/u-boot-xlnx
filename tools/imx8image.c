@@ -14,6 +14,7 @@ static soc_type_t soc;
 static int container = -1;
 static int32_t core_type = CFG_CORE_INVALID;
 static bool emmc_fastboot;
+static bool dcd_skip;
 static image_t param_stack[IMG_STACK_SIZE];
 static uint8_t fuse_version;
 static uint16_t sw_version;
@@ -30,7 +31,7 @@ static void imx8image_set_header(void *ptr, struct stat *sbuf, int ifd,
 {
 }
 
-static void imx8image_print_header(const void *ptr)
+static void imx8image_print_header(const void *ptr, struct image_tool_params *params)
 {
 }
 
@@ -41,6 +42,7 @@ static int imx8image_check_image_types(uint8_t type)
 
 static table_entry_t imx8image_cmds[] = {
 	{CMD_BOOT_FROM,         "BOOT_FROM",            "boot command",	      },
+	{CMD_DCD_SKIP,          "DCD_SKIP",             "skip DCD init",      },
 	{CMD_FUSE_VERSION,      "FUSE_VERSION",         "fuse version",	      },
 	{CMD_SW_VERSION,        "SW_VERSION",           "sw version",	      },
 	{CMD_MSG_BLOCK,         "MSG_BLOCK",            "msg block",	      },
@@ -57,9 +59,11 @@ static table_entry_t imx8image_cmds[] = {
 
 static table_entry_t imx8image_core_entries[] = {
 	{CFG_SCU,	"SCU",			"scu core",	},
+	{CFG_PWR,	"PWR",			"uPower core",	},
 	{CFG_M40,	"M40",			"M4 core 0",	},
 	{CFG_M41,	"M41",			"M4 core 1",	},
 	{CFG_A35,	"A35",			"A35 core",	},
+	{CFG_A55,	"A55",			"A55 core",	},
 	{CFG_A53,	"A53",			"A53 core",	},
 	{CFG_A72,	"A72",			"A72 core",	},
 	{-1,		"",			"",		},
@@ -85,6 +89,10 @@ static void parse_cfg_cmd(image_t *param_stack, int32_t cmd, char *token,
 						 token);
 		if (!strncmp("emmc_fastboot", token, 13))
 			emmc_fastboot = true;
+		break;
+	case CMD_DCD_SKIP:
+		if (!strncmp("true", token, 4))
+			dcd_skip = true;
 		break;
 	case CMD_FUSE_VERSION:
 		fuse_version = (uint8_t)(strtoll(token, NULL, 0) & 0xFF);
@@ -117,6 +125,10 @@ static void parse_cfg_cmd(image_t *param_stack, int32_t cmd, char *token,
 			soc = QX;
 		} else if (!strncmp(token, "IMX8QM", 6)) {
 			soc = QM;
+		} else if (!strncmp(token, "ULP", 3)) {
+			soc = ULP;
+		} else if (!strncmp(token, "IMX9", 4)) {
+			soc = IMX9;
 		} else {
 			fprintf(stderr, "Unknown CMD_SOC_TYPE");
 			exit(EXIT_FAILURE);
@@ -176,6 +188,10 @@ static void parse_cfg_fld(image_t *param_stack, int32_t *cmd, char *token,
 			param_stack[p_idx].option = SCFW;
 			param_stack[p_idx++].filename = token;
 			break;
+		case CFG_PWR:
+			param_stack[p_idx].option = UPOWER;
+			param_stack[p_idx++].filename = token;
+			break;
 		case CFG_M40:
 			param_stack[p_idx].option = M40;
 			param_stack[p_idx].ext = 0;
@@ -187,6 +203,7 @@ static void parse_cfg_fld(image_t *param_stack, int32_t *cmd, char *token,
 			param_stack[p_idx].filename = token;
 			break;
 		case CFG_A35:
+		case CFG_A55:
 			param_stack[p_idx].ext = CORE_CA35;
 			param_stack[p_idx].option =
 				(*cmd == CMD_DATA) ? DATA : AP;
@@ -219,6 +236,7 @@ static void parse_cfg_fld(image_t *param_stack, int32_t *cmd, char *token,
 		case CFG_M41:
 		case CFG_A35:
 		case CFG_A53:
+		case CFG_A55:
 		case CFG_A72:
 			param_stack[p_idx++].entry =
 				(uint32_t)strtoll(token, NULL, 0);
@@ -272,6 +290,7 @@ static uint32_t parse_cfg_file(image_t *param_stack, char *name)
 		}
 	}
 
+	fclose(fd);
 	return 0;
 }
 
@@ -548,6 +567,18 @@ static void set_image_array_entry(flash_header_v3_t *container,
 		img->dst = 0x20C00000;
 		img->entry = 0x20000000;
 		break;
+	case SENTINEL:
+		if (container->num_images > 0) {
+			fprintf(stderr, "Error: SENTINEL container only allows 1 image\n");
+			return;
+		}
+
+		img->hab_flags |= IMG_TYPE_SENTINEL;
+		img->hab_flags |= CORE_ULP_SENTINEL << BOOT_IMG_FLAGS_CORE_SHIFT;
+		tmp_name = "SENTINEL";
+		img->dst = 0xe4000000; /* S400 IRAM base */
+		img->entry = 0xe4000000;
+		break;
 	case AP:
 		if (soc == QX && core == CORE_CA35) {
 			meta = IMAGE_A35_DEFAULT_META(custom_partition);
@@ -555,6 +586,8 @@ static void set_image_array_entry(flash_header_v3_t *container,
 			meta = IMAGE_A53_DEFAULT_META(custom_partition);
 		} else if (soc == QM && core == CORE_CA72) {
 			meta = IMAGE_A72_DEFAULT_META(custom_partition);
+		} else if (((soc == ULP) || (soc == IMX9)) && core == CORE_CA35) {
+			meta = 0;
 		} else {
 			fprintf(stderr,
 				"Error: invalid AP core id: %" PRIu64 "\n",
@@ -562,8 +595,10 @@ static void set_image_array_entry(flash_header_v3_t *container,
 			exit(EXIT_FAILURE);
 		}
 		img->hab_flags |= IMG_TYPE_EXEC;
-		/* On B0, only core id = 4 is valid */
-		img->hab_flags |= CORE_CA53 << BOOT_IMG_FLAGS_CORE_SHIFT;
+		if ((soc == ULP) || (soc == IMX9))
+			img->hab_flags |= CORE_ULP_CA35 << BOOT_IMG_FLAGS_CORE_SHIFT;
+		else
+			img->hab_flags |= CORE_CA53 << BOOT_IMG_FLAGS_CORE_SHIFT; /* On B0, only core id = 4 is valid */
 		tmp_name = "AP";
 		img->dst = entry;
 		img->entry = entry;
@@ -572,17 +607,22 @@ static void set_image_array_entry(flash_header_v3_t *container,
 		break;
 	case M40:
 	case M41:
-		if (core == 0) {
-			core = CORE_CM4_0;
-			meta = IMAGE_M4_0_DEFAULT_META(custom_partition);
-		} else if (core == 1) {
-			core = CORE_CM4_1;
-			meta = IMAGE_M4_1_DEFAULT_META(custom_partition);
+		if ((soc == ULP) || (soc == IMX9)) {
+			core = CORE_ULP_CM33;
+			meta = 0;
 		} else {
-			fprintf(stderr,
-				"Error: invalid m4 core id: %" PRIu64 "\n",
-				core);
-			exit(EXIT_FAILURE);
+			if (core == 0) {
+				core = CORE_CM4_0;
+				meta = IMAGE_M4_0_DEFAULT_META(custom_partition);
+			} else if (core == 1) {
+				core = CORE_CM4_1;
+				meta = IMAGE_M4_1_DEFAULT_META(custom_partition);
+			} else {
+				fprintf(stderr,
+					"Error: invalid m4 core id: %" PRIu64 "\n",
+					core);
+				exit(EXIT_FAILURE);
+			}
 		}
 		img->hab_flags |= IMG_TYPE_EXEC;
 		img->hab_flags |= core << BOOT_IMG_FLAGS_CORE_SHIFT;
@@ -598,7 +638,14 @@ static void set_image_array_entry(flash_header_v3_t *container,
 		break;
 	case DATA:
 		img->hab_flags |= IMG_TYPE_DATA;
-		img->hab_flags |= CORE_CA35 << BOOT_IMG_FLAGS_CORE_SHIFT;
+		if ((soc == ULP) || (soc == IMX9)) {
+			if (core == CORE_CM4_0)
+				img->hab_flags |= CORE_ULP_CM33 << BOOT_IMG_FLAGS_CORE_SHIFT;
+			else
+				img->hab_flags |= CORE_ULP_CA35 << BOOT_IMG_FLAGS_CORE_SHIFT;
+		} else {
+			img->hab_flags |= CORE_CA35 << BOOT_IMG_FLAGS_CORE_SHIFT;
+		}
 		tmp_name = "DATA";
 		img->dst = entry;
 		break;
@@ -628,6 +675,15 @@ static void set_image_array_entry(flash_header_v3_t *container,
 			img->offset = offset + img->size;
 			img->entry = read_dcd_offset(tmp_filename);
 			img->dst = img->entry - 1;
+		}
+		break;
+	case UPOWER:
+		if (soc == ULP) {
+			img->hab_flags |= IMG_TYPE_EXEC;
+			img->hab_flags |= CORE_ULP_UPOWER << BOOT_IMG_FLAGS_CORE_SHIFT;
+			tmp_name = "UPOWER";
+			img->dst = 0x28300200; /* UPOWER code RAM */
+			img->entry = 0x28300200;
 		}
 		break;
 	default:
@@ -784,7 +840,6 @@ static int build_container(soc_type_t soc, uint32_t sector_size,
 	int ret;
 
 	int container = -1;
-	int cont_img_count = 0; /* indexes to arrange the container */
 
 	memset((char *)&imx_header, 0, sizeof(imx_header_v3_t));
 
@@ -797,6 +852,10 @@ static int build_container(soc_type_t soc, uint32_t sector_size,
 		fprintf(stdout, "Platform:\ti.MX8QXP B0\n");
 	else if (soc == QM)
 		fprintf(stdout, "Platform:\ti.MX8QM B0\n");
+	else if (soc == ULP)
+		fprintf(stdout, "Platform:\ti.MX8ULP A0\n");
+	else if (soc == IMX9)
+		fprintf(stdout, "Platform:\ti.MX9\n");
 
 	set_imx_hdr_v3(&imx_header, 0);
 	set_imx_hdr_v3(&imx_header, 1);
@@ -815,6 +874,7 @@ static int build_container(soc_type_t soc, uint32_t sector_size,
 		case M41:
 		case SCFW:
 		case DATA:
+		case UPOWER:
 		case MSG_BLOCK:
 			if (container < 0) {
 				fprintf(stderr, "No container found\n");
@@ -829,10 +889,10 @@ static int build_container(soc_type_t soc, uint32_t sector_size,
 			img_sp->src = file_off;
 
 			file_off += ALIGN(sbuf.st_size, sector_size);
-			cont_img_count++;
 			break;
 
 		case SECO:
+		case SENTINEL:
 			if (container < 0) {
 				fprintf(stderr, "No container found\n");
 				exit(EXIT_FAILURE);
@@ -848,7 +908,6 @@ static int build_container(soc_type_t soc, uint32_t sector_size,
 			img_sp->src = file_off;
 
 			file_off += sbuf.st_size;
-			cont_img_count++;
 			break;
 
 		case NEW_CONTAINER:
@@ -857,8 +916,6 @@ static int build_container(soc_type_t soc, uint32_t sector_size,
 				      CONTAINER_ALIGNMENT,
 				      CONTAINER_FLAGS_DEFAULT,
 				      fuse_version);
-			/* reset img count when moving to new container */
-			cont_img_count = 0;
 			scfw_flags = 0;
 			break;
 
@@ -941,7 +998,8 @@ static int build_container(soc_type_t soc, uint32_t sector_size,
 		if (img_sp->option == M40 || img_sp->option == M41 ||
 		    img_sp->option == AP || img_sp->option == DATA ||
 		    img_sp->option == SCD || img_sp->option == SCFW ||
-		    img_sp->option == SECO || img_sp->option == MSG_BLOCK) {
+		    img_sp->option == SECO || img_sp->option == MSG_BLOCK ||
+		    img_sp->option == UPOWER || img_sp->option == SENTINEL) {
 			copy_file_aligned(ofd, img_sp->filename, img_sp->src,
 					  sector_size);
 		}
@@ -972,7 +1030,7 @@ int imx8image_copy_image(int outfd, struct image_tool_params *mparams)
 	fprintf(stdout, "CONTAINER SW VERSION:\t0x%04x\n", sw_version);
 
 	build_container(soc, sector_size, emmc_fastboot,
-			img_sp, false, fuse_version, sw_version, outfd);
+			img_sp, dcd_skip, fuse_version, sw_version, outfd);
 
 	return 0;
 }

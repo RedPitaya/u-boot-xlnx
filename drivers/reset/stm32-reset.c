@@ -6,7 +6,6 @@
 
 #define LOG_CATEGORY UCLASS_RESET
 
-#include <common.h>
 #include <dm.h>
 #include <errno.h>
 #include <log.h>
@@ -26,16 +25,6 @@
 struct stm32_reset_priv {
 	fdt_addr_t base;
 };
-
-static int stm32_reset_request(struct reset_ctl *reset_ctl)
-{
-	return 0;
-}
-
-static int stm32_reset_free(struct reset_ctl *reset_ctl)
-{
-	return 0;
-}
 
 static int stm32_reset_assert(struct reset_ctl *reset_ctl)
 {
@@ -80,8 +69,6 @@ static int stm32_reset_deassert(struct reset_ctl *reset_ctl)
 }
 
 static const struct reset_ops stm32_reset_ops = {
-	.request	= stm32_reset_request,
-	.rfree		= stm32_reset_free,
 	.rst_assert	= stm32_reset_assert,
 	.rst_deassert	= stm32_reset_deassert,
 };

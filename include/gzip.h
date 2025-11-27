@@ -7,6 +7,8 @@
 #ifndef __GZIP_H
 #define __GZIP_H
 
+#include <linux/types.h>
+
 struct blk_desc;
 
 /**
@@ -16,7 +18,7 @@ struct blk_desc;
  *
  * @src: Pointer to gzip file
  * @len: Length of data
- * @return length of header in bytes, or -1 if not enough data
+ * Return: length of header in bytes, or -1 if not enough data
  */
 int gzip_parse_header(const unsigned char *src, unsigned long len);
 
@@ -26,8 +28,9 @@ int gzip_parse_header(const unsigned char *src, unsigned long len);
  * @dst: Destination for uncompressed data
  * @dstlen: Size of destination buffer
  * @src: Source data to decompress
- * @lenp: Returns length of uncompressed data
- * @return 0 if OK, -1 on error
+ * @lenp: On entry, length of data at @src. On exit, number of bytes used from
+ * @src
+ * Return: 0 if OK, -1 on error
  */
 int gunzip(void *dst, int dstlen, unsigned char *src, unsigned long *lenp);
 
@@ -37,10 +40,11 @@ int gunzip(void *dst, int dstlen, unsigned char *src, unsigned long *lenp);
  * @dst: Destination for uncompressed data
  * @dstlen: Size of destination buffer
  * @src: Source data to decompress
- * @lenp: On entry, length data at @src. On exit, number of bytes used from @src
+ * @lenp: On entry, length of data at @src. On exit, number of bytes used from
+ * @src
  * @stoponerr: 0 to continue when a decode error is found, 1 to stop
  * @offset: start offset within the src buffer
- * @return 0 if OK, -1 on error
+ * Return: 0 if OK, -1 on error
  */
 int zunzip(void *dst, int dstlen, unsigned char *src, unsigned long *lenp,
 	   int stoponerr, int offset);
@@ -71,7 +75,7 @@ void gzwrite_progress_finish(int retcode, ulong totalwritten, ulong totalsize,
  * @startoffs:	offset in bytes of first write
  * @szexpected:	expected uncompressed length, may be zero to use gzip trailer
  *		for files under 4GiB
- * @return 0 if OK, -1 on error
+ * Return: 0 if OK, -1 on error
  */
 int gzwrite(unsigned char *src, int len, struct blk_desc *dev, ulong szwritebuf,
 	    ulong startoffs, ulong szexpected);
@@ -84,7 +88,7 @@ int gzwrite(unsigned char *src, int len, struct blk_desc *dev, ulong szwritebuf,
  *	number of bytes used in the buffer
  * @src: Source data to compress
  * @srclen: Size of source data
- * @return 0 if OK, -1 on error
+ * Return: 0 if OK, -1 on error
  */
 int gzip(void *dst, unsigned long *lenp, unsigned char *src, ulong srclen);
 

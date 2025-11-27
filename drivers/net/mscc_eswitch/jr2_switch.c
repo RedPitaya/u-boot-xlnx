@@ -3,7 +3,6 @@
  * Copyright (c) 2018 Microsemi Corporation
  */
 
-#include <common.h>
 #include <config.h>
 #include <dm.h>
 #include <malloc.h>
@@ -17,6 +16,7 @@
 #include <miiphy.h>
 #include <net.h>
 #include <wait_bit.h>
+#include <linux/printk.h>
 
 #include <dt-bindings/mscc/jr2_data.h>
 #include "mscc_xfer.h"
@@ -954,7 +954,7 @@ static int jr2_probe(struct udevice *dev)
 
 		phy = phy_connect(priv->ports[i].bus,
 				  priv->ports[i].phy_addr, dev,
-				  PHY_INTERFACE_MODE_NONE);
+				  PHY_INTERFACE_MODE_NA);
 		if (phy)
 			board_phy_config(phy);
 	}

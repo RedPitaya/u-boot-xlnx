@@ -5,7 +5,6 @@
  * Peng Fan <peng.fan@nxp.com>
  */
 
-#include <common.h>
 #include <command.h>
 #include <asm/arch/clock.h>
 #include <asm/arch/imx-regs.h>
@@ -359,10 +358,18 @@ unsigned int mxc_get_clock(enum mxc_clock clk)
 		clock_get_target_val(IPG_CLK_ROOT, &val);
 		val = val & 0x3;
 		return get_root_clk(AHB_CLK_ROOT) / (val + 1);
+	case MXC_CSPI_CLK:
+		return get_root_clk(ECSPI1_CLK_ROOT);
 	case MXC_ESDHC_CLK:
 		return get_root_clk(USDHC1_CLK_ROOT);
 	case MXC_ESDHC2_CLK:
 		return get_root_clk(USDHC2_CLK_ROOT);
+	case MXC_I2C_CLK:
+		return get_root_clk(I2C1_CLK_ROOT);
+	case MXC_UART_CLK:
+		return get_root_clk(UART1_CLK_ROOT);
+	case MXC_QSPI_CLK:
+		return get_root_clk(QSPI_CLK_ROOT);
 	default:
 		return get_root_clk(clk);
 	}
@@ -604,7 +611,7 @@ void dram_disable_bypass(void)
 			     CLK_ROOT_PRE_DIV(CLK_ROOT_PRE_DIV5));
 }
 
-#ifdef CONFIG_SPL_BUILD
+#ifdef CONFIG_XPL_BUILD
 void dram_pll_init(ulong pll_val)
 {
 	u32 val;
@@ -726,7 +733,6 @@ static int frac_pll_init(u32 pll, enum frac_pll_out_val val)
 	return 0;
 }
 
-
 int clock_init(void)
 {
 	u32 grade;
@@ -785,7 +791,7 @@ int clock_init(void)
 /*
  * Dump some clockes.
  */
-#ifndef CONFIG_SPL_BUILD
+#ifndef CONFIG_XPL_BUILD
 static int do_imx8m_showclocks(struct cmd_tbl *cmdtp, int flag, int argc,
 			       char *const argv[])
 {

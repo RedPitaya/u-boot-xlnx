@@ -5,7 +5,6 @@
  * Derived from code Copyright (C) 2017 Marek Vasut <marek.vasut@gmail.com>
  */
 
-#include <common.h>
 #include <clk.h>
 #include <clk-uclass.h>
 #include <dm.h>
@@ -17,7 +16,7 @@
 #include <linux/kernel.h>
 #include <linux/math64.h>
 
-#include <dt-bindings/clk/versaclock.h>
+#include <dt-bindings/clock/versaclock.h>
 
 /* VersaClock5 registers */
 #define VC5_OTP_CONTROL				0x00
@@ -618,24 +617,6 @@ static int vc5_clk_out_set_parent(struct vc5_driver_data *vc, u8 num, u8 index)
 	return vc5_update_bits(vc->i2c, VC5_OUT_DIV_CONTROL(num), mask, src);
 }
 
-/*
- * The device references to the Versaclock point to the head, so xlate needs to
- * redirect it to clk_out[idx]
- */
-static int vc5_clk_out_xlate(struct clk *hw, struct ofnode_phandle_args *args)
-{
-	unsigned int idx = args->args[0];
-
-	if (args->args_count != 1) {
-		debug("Invaild args_count: %d\n", args->args_count);
-		return -EINVAL;
-	}
-
-	hw->id = idx;
-
-	return 0;
-}
-
 static unsigned long vc5_clk_out_set_rate(struct clk *hw, unsigned long rate)
 {
 	struct udevice *dev;
@@ -671,7 +652,6 @@ static const struct clk_ops vc5_clk_out_sel_ops = {
 static const struct clk_ops vc5_clk_ops = {
 	.enable	= vc5_clk_out_prepare,
 	.disable	= vc5_clk_out_unprepare,
-	.of_xlate	= vc5_clk_out_xlate,
 	.set_rate	= vc5_clk_out_set_rate,
 	.get_rate	= vc5_clk_out_get_rate,
 };
@@ -1019,26 +999,18 @@ int versaclock_probe(struct udevice *dev)
 	return 0;
 
 free_out:
-	for (n = 1; n < vc5->chip_info->clk_out_cnt; n++) {
-		clk_free(&vc5->clk_out[n].hw);
+	for (n = 1; n < vc5->chip_info->clk_out_cnt; n++)
 		free(out_name[n]);
-	}
 free_selb:
-	clk_free(&vc5->clk_out[0].hw);
 	free(outsel_name);
 free_fod:
-	for (n = 0; n < vc5->chip_info->clk_fod_cnt; n++) {
-		clk_free(&vc5->clk_fod[n].hw);
+	for (n = 0; n < vc5->chip_info->clk_fod_cnt; n++)
 		free(fod_name[n]);
-	}
 free_pll:
-	clk_free(&vc5->clk_pll.hw);
 	free(pll_name);
 free_pfd:
-	clk_free(&vc5->clk_pfd);
 	free(pfd_name);
 free_mux:
-	clk_free(&vc5->clk_mux);
 	free(mux_name);
 
 	return ret;

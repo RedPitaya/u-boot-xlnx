@@ -5,7 +5,6 @@
  *  Copyright (C) 2021 Arm Ltd.
  */
 
-#include <common.h>
 #include <efi_loader.h>
 #include <log.h>
 #include <efi_api.h>
@@ -115,7 +114,7 @@ efi_status_t efi_esrt_allocate_install(u32 num_entries)
 	u32 size = efi_esrt_entries_to_size(num_entries);
 	efi_guid_t esrt_guid = efi_esrt_guid;
 
-	/* Reserve num_pages for ESRT */
+	/* Reserve memory for ESRT */
 	ret = efi_allocate_pool(EFI_BOOT_SERVICES_DATA, size,
 				(void **)&new_esrt);
 
@@ -180,7 +179,7 @@ struct efi_system_resource_entry *esrt_find_entry(efi_guid_t *img_fw_class)
 	/* Check if the image with img_fw_class is already in the ESRT. */
 	for (u32 idx = 0; idx < filled_entries; idx++) {
 		if (!guidcmp(&entry[idx].fw_class, img_fw_class)) {
-			EFI_PRINT("ESRT found entry for image %pUl at index %u\n",
+			EFI_PRINT("ESRT found entry for image %pUs at index %u\n",
 				  img_fw_class, idx);
 			return &entry[idx];
 		}
@@ -202,7 +201,7 @@ struct efi_system_resource_entry *esrt_find_entry(efi_guid_t *img_fw_class)
 	 */
 	esrt->fw_resource_count++;
 	entry[filled_entries].fw_class = *img_fw_class;
-	EFI_PRINT("ESRT allocated new entry for image %pUl at index %u\n",
+	EFI_PRINT("ESRT allocated new entry for image %pUs at index %u\n",
 		  img_fw_class, filled_entries);
 
 	return &entry[filled_entries];
@@ -235,7 +234,7 @@ efi_status_t efi_esrt_add_from_fmp(struct efi_firmware_management_protocol *fmp)
 	 * TODO: set the field image_type depending on the FW image type
 	 * defined in a platform basis.
 	 */
-	u32 image_type = ESRT_FW_TYPE_UNKNOWN;
+	u32 image_type = ESRT_FW_TYPE_SYSTEMFIRMWARE;
 
 	/* TODO: set the capsule flags as a function of the FW image type. */
 	u32 flags = 0;
@@ -291,7 +290,7 @@ efi_status_t efi_esrt_add_from_fmp(struct efi_firmware_management_protocol *fmp)
 				EFI_PRINT("ESRT entry mismatches image_type\n");
 
 		} else {
-			EFI_PRINT("ESRT failed to add entry for %pUl\n",
+			EFI_PRINT("ESRT failed to add entry for %pUs\n",
 				  &cur_img_info->image_type_id);
 			continue;
 		}
@@ -365,7 +364,7 @@ efi_status_t efi_esrt_populate(void)
 		if (ret != EFI_SUCCESS) {
 			EFI_PRINT("ESRT Unable to find FMP handle (%u)\n",
 				  idx);
-			goto out;
+			continue;
 		}
 		fmp = handler->protocol_interface;
 
@@ -380,15 +379,14 @@ efi_status_t efi_esrt_populate(void)
 			 * fmp->get_image_info to return BUFFER_TO_SMALL.
 			 */
 			EFI_PRINT("ESRT erroneous FMP implementation\n");
-			ret = EFI_INVALID_PARAMETER;
-			goto out;
+			continue;
 		}
 
 		ret = efi_allocate_pool(EFI_BOOT_SERVICES_DATA, info_size,
 					(void **)&img_info);
 		if (ret != EFI_SUCCESS) {
 			EFI_PRINT("ESRT failed to allocate memory for image info\n");
-			goto out;
+			continue;
 		}
 
 		/*
@@ -406,12 +404,19 @@ efi_status_t efi_esrt_populate(void)
 		if (ret != EFI_SUCCESS) {
 			EFI_PRINT("ESRT failed to obtain image info from FMP\n");
 			efi_free_pool(img_info);
-			goto out;
+			continue;
 		}
 
 		num_entries += desc_count;
 
 		efi_free_pool(img_info);
+	}
+
+	/* error occurs in fmp->get_image_info() if num_entries is 0 here */
+	if (!num_entries) {
+		EFI_PRINT("Error occurs, num_entries should not be 0\n");
+		ret = EFI_INVALID_PARAMETER;
+		goto out;
 	}
 
 	EFI_PRINT("ESRT create table with %u entries\n", num_entries);
@@ -437,7 +442,7 @@ efi_status_t efi_esrt_populate(void)
 		if (ret != EFI_SUCCESS) {
 			EFI_PRINT("ESRT unable to find FMP handle (%u)\n",
 				  idx);
-			break;
+			continue;
 		}
 		fmp = handler->protocol_interface;
 

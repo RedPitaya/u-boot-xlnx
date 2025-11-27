@@ -5,7 +5,6 @@
 
 #define LOG_CATEGORY UCLASS_RESET
 
-#include <common.h>
 #include <dm.h>
 #include <dm/device_compat.h>
 #include <reset-uclass.h>
@@ -23,7 +22,7 @@ static int zynqmp_pm_reset_assert(const u32 reset,
 				  const enum zynqmp_pm_reset_action assert_flag)
 {
 	return xilinx_pm_request(PM_RESET_ASSERT, reset, assert_flag, 0, 0,
-				 NULL);
+				 0, 0, NULL);
 }
 
 static int zynqmp_reset_assert(struct reset_ctl *rst)
@@ -59,16 +58,6 @@ static int zynqmp_reset_request(struct reset_ctl *rst)
 	return 0;
 }
 
-static int zynqmp_reset_free(struct reset_ctl *rst)
-{
-	struct zynqmp_reset_priv *priv = dev_get_priv(rst->dev);
-
-	dev_dbg(rst->dev, "%s(rst=%p) (id=%lu) (nr_reset=%d)\n", __func__,
-		rst, rst->id, priv->nr_reset);
-
-	return 0;
-}
-
 static int zynqmp_reset_probe(struct udevice *dev)
 {
 	struct zynqmp_reset_priv *priv = dev_get_priv(dev);
@@ -83,7 +72,6 @@ static int zynqmp_reset_probe(struct udevice *dev)
 
 const struct reset_ops zynqmp_reset_ops = {
 	.request = zynqmp_reset_request,
-	.rfree = zynqmp_reset_free,
 	.rst_assert = zynqmp_reset_assert,
 	.rst_deassert = zynqmp_reset_deassert,
 };
@@ -91,6 +79,7 @@ const struct reset_ops zynqmp_reset_ops = {
 static const struct udevice_id zynqmp_reset_ids[] = {
 	{ .compatible = "xlnx,zynqmp-reset" },
 	{ .compatible = "xlnx,versal-reset" },
+	{ .compatible = "xlnx,versal-net-reset" },
 	{ }
 };
 

@@ -6,7 +6,7 @@
  * Written by Simon Glass <sjg@chromium.org>
  */
 
-#include <common.h>
+#include <display_options.h>
 #include <log.h>
 #include <malloc.h>
 #include <asm/global_data.h>
@@ -28,6 +28,11 @@ static const char *const log_cat_name[] = {
 	"devres",
 	"acpi",
 	"boot",
+	"event",
+	"fs",
+	"expo",
+	"console",
+	"test",
 };
 
 _Static_assert(ARRAY_SIZE(log_cat_name) == LOGC_COUNT - LOGC_NONE,
@@ -147,7 +152,7 @@ bool log_has_file(const char *file_list, const char *file)
  *
  * @ldev: Log device to check
  * @rec: Log record to check
- * @return true if @rec is not blocked by the filters in @ldev, false if it is
+ * Return: true if @rec is not blocked by the filters in @ldev, false if it is
  */
 static bool log_passes_filters(struct log_device *ldev, struct log_rec *rec)
 {
@@ -390,7 +395,7 @@ int log_remove_filter(const char *drv_name, int filter_num)
  * log_find_device_by_drv() - Find a device by its driver
  *
  * @drv: Log driver
- * @return Device associated with that driver, or NULL if not found
+ * Return: Device associated with that driver, or NULL if not found
  */
 static struct log_device *log_find_device_by_drv(struct log_driver *drv)
 {
@@ -424,6 +429,11 @@ int log_device_set_enable(struct log_driver *drv, bool enable)
 	return 0;
 }
 
+void log_fixup_for_gd_move(struct global_data *new_gd)
+{
+	new_gd->log_head.prev->next = &new_gd->log_head;
+}
+
 int log_init(void)
 {
 	struct log_driver *drv = ll_entry_start(struct log_driver, log_driver);
@@ -433,7 +443,7 @@ int log_init(void)
 	/*
 	 * We cannot add runtime data to the driver since it is likely stored
 	 * in rodata. Instead, set up a 'device' corresponding to each driver.
-	 * We only support having a single device.
+	 * We only support having a single device for each driver.
 	 */
 	INIT_LIST_HEAD((struct list_head *)&gd->log_head);
 	while (drv < end) {

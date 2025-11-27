@@ -4,16 +4,61 @@
  * Written by Simon Glass <sjg@chromium.org>
  */
 
-#include <common.h>
+#define LOG_CATEGORY	LOGC_TEST
+
+#include <blk.h>
 #include <console.h>
+#include <cyclic.h>
 #include <dm.h>
+#include <event.h>
+#include <net.h>
+#include <of_live.h>
+#include <os.h>
+#include <usb.h>
+#include <dm/ofnode.h>
 #include <dm/root.h>
 #include <dm/test.h>
 #include <dm/uclass-internal.h>
 #include <test/test.h>
 #include <test/ut.h>
+#include <u-boot/crc.h>
 
 DECLARE_GLOBAL_DATA_PTR;
+
+/**
+ * enum fdtchk_t - what to do with the device tree (gd->fdt_blob)
+ *
+ * This affects what happens with the device tree before and after a test
+ *
+ * @FDTCHK_NONE: Do nothing
+ * @FDTCHK_CHECKSUM: Take a checksum of the FDT before the test runs and
+ *	compare it afterwards to detect any changes
+ * @FDTCHK_COPY: Make a copy of the FDT and restore it afterwards
+ */
+enum fdtchk_t {
+	FDTCHK_NONE,
+	FDTCHK_CHECKSUM,
+	FDTCHK_COPY,
+};
+
+/**
+ * fdt_action() - get the required action for the FDT
+ *
+ * @return the action that should be taken for this build
+ */
+static enum fdtchk_t fdt_action(void)
+{
+	/* For sandbox SPL builds, do nothing */
+	if (IS_ENABLED(CONFIG_SANDBOX) && IS_ENABLED(CONFIG_XPL_BUILD))
+		return FDTCHK_NONE;
+
+	/* Do a copy for sandbox (but only the U-Boot build, not SPL) */
+	if (IS_ENABLED(CONFIG_SANDBOX))
+		return FDTCHK_COPY;
+
+	/* For all other boards, do a checksum */
+	return FDTCHK_CHECKSUM;
+}
 
 /* This is valid when a test is running, NULL otherwise */
 static struct unit_test_state *cur_test_state;
@@ -40,17 +85,26 @@ static int dm_test_pre_run(struct unit_test_state *uts)
 {
 	bool of_live = uts->of_live;
 
+	if (of_live && (gd->flags & GD_FLG_FDT_CHANGED)) {
+		printf("Cannot run live tree test as device tree changed\n");
+		return -EFAULT;
+	}
 	uts->root = NULL;
 	uts->testdev = NULL;
 	uts->force_fail_alloc = false;
 	uts->skip_post_probe = false;
+	if (fdt_action() == FDTCHK_CHECKSUM)
+		uts->fdt_chksum = crc8(0, gd->fdt_blob,
+				       fdt_totalsize(gd->fdt_blob));
 	gd->dm_root = NULL;
+	malloc_disable_testing();
 	if (CONFIG_IS_ENABLED(UT_DM) && !CONFIG_IS_ENABLED(OF_PLATDATA))
 		memset(dm_testdrv_op_count, '\0', sizeof(dm_testdrv_op_count));
 	arch_reset_for_test();
 
 	/* Determine whether to make the live tree available */
 	gd_set_of_root(of_live ? uts->of_root : NULL);
+	oftree_reset();
 	ut_assertok(dm_init(of_live));
 	uts->root = dm_root();
 
@@ -60,6 +114,33 @@ static int dm_test_pre_run(struct unit_test_state *uts)
 static int dm_test_post_run(struct unit_test_state *uts)
 {
 	int id;
+
+	if (gd->fdt_blob) {
+		switch (fdt_action()) {
+		case FDTCHK_COPY:
+			memcpy((void *)gd->fdt_blob, uts->fdt_copy, uts->fdt_size);
+			break;
+		case FDTCHK_CHECKSUM: {
+			uint chksum;
+
+			chksum = crc8(0, gd->fdt_blob, fdt_totalsize(gd->fdt_blob));
+			if (chksum != uts->fdt_chksum) {
+				/*
+				 * We cannot run any more tests that need the
+				 * live tree, since its strings point into the
+				 * flat tree, which has changed. This likely
+				 * means that at least some of the pointers from
+				 * the live tree point to different things
+				 */
+				printf("Device tree changed: cannot run live tree tests\n");
+				gd->flags |= GD_FLG_FDT_CHANGED;
+			}
+			break;
+		}
+		case FDTCHK_NONE:
+			break;
+		}
+	}
 
 	/*
 	 * With of-platdata-inst the uclasses are created at build time. If we
@@ -88,16 +169,7 @@ static int dm_test_post_run(struct unit_test_state *uts)
 /* Ensure all the test devices are probed */
 static int do_autoprobe(struct unit_test_state *uts)
 {
-	struct udevice *dev;
-	int ret;
-
-	/* Scanning the uclass is enough to probe all the devices */
-	for (ret = uclass_first_device(UCLASS_TEST, &dev);
-	     dev;
-	     ret = uclass_next_device(&dev))
-		;
-
-	return ret;
+	return uclass_probe_all(UCLASS_TEST);
 }
 
 /*
@@ -106,13 +178,13 @@ static int do_autoprobe(struct unit_test_state *uts)
  * This skips long/slow tests where there is not much value in running a flat
  * DT test in addition to a live DT test.
  *
- * @return true to run the given test on the flat device tree
+ * Return: true to run the given test on the flat device tree
  */
 static bool ut_test_run_on_flattree(struct unit_test *test)
 {
 	const char *fname = strrchr(test->file, '/') + 1;
 
-	if (!(test->flags & UT_TESTF_DM))
+	if (!(test->flags & UTF_DM))
 		return false;
 
 	return !strstr(fname, "video") || strstr(test->name, "video_base");
@@ -130,7 +202,7 @@ static bool ut_test_run_on_flattree(struct unit_test *test)
  *	a prefix.
  * @test_name: Name of current test
  * @select_name: Name of test to run (or NULL for all)
- * @return true to run this test, false to skip it
+ * Return: true to run this test, false to skip it
  */
 static bool test_matches(const char *prefix, const char *test_name,
 			 const char *select_name)
@@ -170,15 +242,22 @@ static bool test_matches(const char *prefix, const char *test_name,
  * ut_list_has_dm_tests() - Check if a list of tests has driver model ones
  *
  * @tests: List of tests to run
- * @count: Number of tests to ru
- * @return true if any of the tests have the UT_TESTF_DM flag
+ * @count: Number of tests to run
+ * @prefix: String prefix for the tests. Any tests that have this prefix will be
+ *	printed without the prefix, so that it is easier to see the unique part
+ *	of the test name. If NULL, no prefix processing is done
+ * @select_name: Name of a single test being run (from the list provided). If
+ *	NULL all tests are being run
+ * Return: true if any of the tests have the UTF_DM flag
  */
-static bool ut_list_has_dm_tests(struct unit_test *tests, int count)
+static bool ut_list_has_dm_tests(struct unit_test *tests, int count,
+				 const char *prefix, const char *select_name)
 {
 	struct unit_test *test;
 
 	for (test = tests; test < tests + count; test++) {
-		if (test->flags & UT_TESTF_DM)
+		if (test_matches(prefix, test->name, select_name) &&
+		    (test->flags & UTF_DM))
 			return true;
 	}
 
@@ -189,7 +268,7 @@ static bool ut_list_has_dm_tests(struct unit_test *tests, int count)
  * dm_test_restore() Put things back to normal so sandbox works as expected
  *
  * @of_root: Value to set for of_root
- * @return 0 if OK, -ve on error
+ * Return: 0 if OK, -ve on error
  */
 static int dm_test_restore(struct device_node *of_root)
 {
@@ -202,7 +281,7 @@ static int dm_test_restore(struct device_node *of_root)
 		return ret;
 	dm_scan_plat(false);
 	if (!CONFIG_IS_ENABLED(OF_PLATDATA))
-		dm_scan_fdt(false);
+		dm_extended_scan(false);
 
 	return 0;
 }
@@ -212,30 +291,96 @@ static int dm_test_restore(struct device_node *of_root)
  *
  * @uts: Test state
  * @test: Test to prepare for
- * @return 0 if OK, -EAGAIN to skip this test since some required feature is not
+ * Return: 0 if OK, -EAGAIN to skip this test since some required feature is not
  *	available, other -ve on error (meaning that testing cannot likely
  *	continue)
  */
 static int test_pre_run(struct unit_test_state *uts, struct unit_test *test)
 {
-	if (test->flags & UT_TESTF_DM)
+	ut_assertok(event_init());
+
+	/*
+	 * Remove any USB keyboard, so that we can add and remove USB devices
+	 * in tests.
+	 *
+	 * For UTF_DM tests, the old driver model state is saved and
+	 * restored across each test. Within in each test there is therefore a
+	 * new driver model state, which means that any USB keyboard device in
+	 * stdio points to the old state.
+	 *
+	 * This is fine in most cases. But if a non-UTF_DM test starts up
+	 * USB (thus creating a stdio record pointing to the USB keyboard
+	 * device) then when the test finishes, the new driver model state is
+	 * freed, meaning that there is now a stale pointer in stdio.
+	 *
+	 * This means that any future UTF_DM test which uses stdin will
+	 * cause the console system to call tstc() on the stale device pointer,
+	 * causing a crash.
+	 *
+	 * We don't want to fix this by enabling UTF_DM for all tests as
+	 * this causes other problems. For example, bootflow_efi relies on
+	 * U-Boot going through a proper init - without that we don't have the
+	 * TCG measurement working and get an error
+	 * 'tcg2 measurement fails(0x8000000000000007)'. Once we tidy up how EFI
+	 * runs tests (e.g. get rid of all the restarting of U-Boot) we could
+	 * potentially make the bootstd tests set UTF_DM, but other tests
+	 * might do the same thing.
+	 *
+	 * We could add a test flag to declare that USB is being used, but that
+	 * seems unnecessary, at least for now. We could detect USB being used
+	 * in a test, but there is no obvious drawback to clearing out stale
+	 * pointers always.
+	 *
+	 * So just remove any USB keyboards from the console tables. This allows
+	 * UTF_DM and non-UTF_DM tests to coexist happily.
+	 */
+	usb_kbd_remove_for_test();
+
+	if (test->flags & UTF_DM)
 		ut_assertok(dm_test_pre_run(uts));
 
 	ut_set_skip_delays(uts, false);
 
 	uts->start = mallinfo();
 
-	if (test->flags & UT_TESTF_SCAN_PDATA)
+	if (test->flags & UTF_SCAN_PDATA)
 		ut_assertok(dm_scan_plat(false));
 
-	if (test->flags & UT_TESTF_PROBE_TEST)
+	if (test->flags & UTF_PROBE_TEST)
 		ut_assertok(do_autoprobe(uts));
 
-	if (!CONFIG_IS_ENABLED(OF_PLATDATA) &&
-	    (test->flags & UT_TESTF_SCAN_FDT))
+	if (CONFIG_IS_ENABLED(OF_REAL) &&
+	    (test->flags & UTF_SCAN_FDT)) {
+		/*
+		 * only set this if we know the ethernet uclass will be created
+		 */
+		eth_set_enable_bootdevs(test->flags & UTF_ETH_BOOTDEV);
+		test_sf_set_enable_bootdevs(test->flags & UTF_SF_BOOTDEV);
 		ut_assertok(dm_extended_scan(false));
+	}
 
-	if (test->flags & UT_TESTF_CONSOLE_REC) {
+	/*
+	 * Do this after FDT scan since dm_scan_other() in bootstd-uclass.c
+	 * checks for the existence of bootstd
+	 */
+	if (test->flags & UTF_SCAN_PDATA)
+		ut_assertok(dm_scan_other(false));
+
+	if (IS_ENABLED(CONFIG_SANDBOX) && (test->flags & UTF_OTHER_FDT)) {
+		/* make sure the other FDT is available */
+		ut_assertok(test_load_other_fdt(uts));
+
+		/*
+		 * create a new live tree with it for every test, in case a
+		 * test modifies the tree
+		 */
+		if (of_live_active()) {
+			ut_assertok(unflatten_device_tree(uts->other_fdt,
+							  &uts->of_other));
+		}
+	}
+
+	if (test->flags & UTF_CONSOLE) {
 		int ret = console_record_reset_enable();
 
 		if (ret) {
@@ -243,6 +388,12 @@ static int test_pre_run(struct unit_test_state *uts, struct unit_test *test)
 			return -EAGAIN;
 		}
 	}
+	if (test->flags & UFT_BLOBLIST) {
+		log_debug("save bloblist %p\n", gd_bloblist());
+		uts->old_bloblist = gd_bloblist();
+		gd_set_bloblist(NULL);
+	}
+
 	ut_silence_console(uts);
 
 	return 0;
@@ -253,15 +404,40 @@ static int test_pre_run(struct unit_test_state *uts, struct unit_test *test)
  *
  * @uts: Test state
  * @test: Test to clean up after
- * @return 0 if OK, -ve on error (meaning that testing cannot likely continue)
+ * Return: 0 if OK, -ve on error (meaning that testing cannot likely continue)
  */
 static int test_post_run(struct unit_test_state *uts, struct unit_test *test)
 {
 	ut_unsilence_console(uts);
-	if (test->flags & UT_TESTF_DM)
+	if (test->flags & UTF_DM)
 		ut_assertok(dm_test_post_run(uts));
+	ut_assertok(cyclic_unregister_all());
+	ut_assertok(event_uninit());
+
+	free(uts->of_other);
+	uts->of_other = NULL;
+
+	if (test->flags & UFT_BLOBLIST) {
+		gd_set_bloblist(uts->old_bloblist);
+		log_debug("restore bloblist %p\n", gd_bloblist());
+	}
+
+	blkcache_free();
 
 	return 0;
+}
+
+/**
+ * skip_test() - Handle skipping a test
+ *
+ * @uts: Test state to update
+ * @return -EAGAIN (always)
+ */
+static int skip_test(struct unit_test_state *uts)
+{
+	uts->skip_count++;
+
+	return -EAGAIN;
 }
 
 /**
@@ -275,7 +451,7 @@ static int test_post_run(struct unit_test_state *uts, struct unit_test *test)
  *	incremented by the number of failures (0, one hopes)
  * @test_name: Test to run
  * @name: Name of test, possibly skipping a prefix that should not be displayed
- * @return 0 if all tests passed, -EAGAIN if the test should be skipped, -1 if
+ * Return: 0 if all tests passed, -EAGAIN if the test should be skipped, -1 if
  *	any failed
  */
 static int ut_run_test(struct unit_test_state *uts, struct unit_test *test,
@@ -285,7 +461,7 @@ static int ut_run_test(struct unit_test_state *uts, struct unit_test *test,
 	const char *note = "";
 	int ret;
 
-	if ((test->flags & UT_TESTF_DM) && !uts->of_live)
+	if ((test->flags & UTF_DM) && !uts->of_live)
 		note = " (flat tree)";
 	printf("Test: %s: %s%s\n", test_name, fname, note);
 
@@ -294,11 +470,13 @@ static int ut_run_test(struct unit_test_state *uts, struct unit_test *test,
 
 	ret = test_pre_run(uts, test);
 	if (ret == -EAGAIN)
-		return -EAGAIN;
+		return skip_test(uts);
 	if (ret)
 		return ret;
 
-	test->func(uts);
+	ret = test->func(uts);
+	if (ret == -EAGAIN)
+		skip_test(uts);
 
 	ret = test_post_run(uts, test);
 	if (ret)
@@ -322,34 +500,55 @@ static int ut_run_test(struct unit_test_state *uts, struct unit_test *test,
  *	the first call to this function. On exit, @uts->fail_count is
  *	incremented by the number of failures (0, one hopes)
  * @test: Test to run
- * @name: Name of test, possibly skipping a prefix that should not be displayed
- * @return 0 if all tests passed, -EAGAIN if the test should be skipped, -1 if
+ * Return: 0 if all tests passed, -EAGAIN if the test should be skipped, -1 if
  *	any failed
  */
 static int ut_run_test_live_flat(struct unit_test_state *uts,
-				 struct unit_test *test, const char *name)
+				 struct unit_test *test)
 {
-	int runs;
+	int runs, ret;
+
+	if ((test->flags & UTF_OTHER_FDT) && !IS_ENABLED(CONFIG_SANDBOX))
+		return skip_test(uts);
 
 	/* Run with the live tree if possible */
 	runs = 0;
 	if (CONFIG_IS_ENABLED(OF_LIVE)) {
-		if (!(test->flags & UT_TESTF_FLAT_TREE)) {
+		if (!(test->flags & UTF_FLAT_TREE)) {
 			uts->of_live = true;
-			ut_assertok(ut_run_test(uts, test, test->name));
-			runs++;
+			ret = ut_run_test(uts, test, test->name);
+			if (ret != -EAGAIN) {
+				ut_assertok(ret);
+				runs++;
+			}
 		}
 	}
 
 	/*
-	 * Run with the flat tree if we couldn't run it with live tree,
-	 * or it is a core test.
+	 * Run with the flat tree if:
+	 * - it is not marked for live tree only
+	 * - it doesn't require the 'other' FDT when OFNODE_MULTI_TREE_MAX is
+	 *   not enabled (since flat tree can only support a single FDT in that
+	 *   case
+	 * - we couldn't run it with live tree,
+	 * - it is a core test (dm tests except video)
+	 * - the FDT is still valid and has not been updated by an earlier test
+	 *   (for sandbox we handle this by copying the tree, but not for other
+	 *    boards)
 	 */
-	if (!(test->flags & UT_TESTF_LIVE_TREE) &&
-	    (!runs || ut_test_run_on_flattree(test))) {
+	if ((!CONFIG_IS_ENABLED(OF_LIVE) ||
+	     (test->flags & UTF_SCAN_FDT)) &&
+	    !(test->flags & UTF_LIVE_TREE) &&
+	    (CONFIG_IS_ENABLED(OFNODE_MULTI_TREE) ||
+	     !(test->flags & UTF_OTHER_FDT)) &&
+	    (!runs || ut_test_run_on_flattree(test)) &&
+	    !(gd->flags & GD_FLG_FDT_CHANGED)) {
 		uts->of_live = false;
-		ut_assertok(ut_run_test(uts, test, test->name));
-		runs++;
+		ret = ut_run_test(uts, test, test->name);
+		if (ret != -EAGAIN) {
+			ut_assertok(ret);
+			runs++;
+		}
 	}
 
 	return 0;
@@ -371,23 +570,84 @@ static int ut_run_test_live_flat(struct unit_test_state *uts,
  * @count: Number of tests to run
  * @select_name: Name of a single test to run (from the list provided). If NULL
  *	then all tests are run
- * @return 0 if all tests passed, -ENOENT if test @select_name was not found,
+ * @test_insert: String describing a test to run after n other tests run, in the
+ * format n:name where n is the number of tests to run before this one and
+ * name is the name of the test to run
+ * Return: 0 if all tests passed, -ENOENT if test @select_name was not found,
  *	-EBADF if any failed
  */
 static int ut_run_tests(struct unit_test_state *uts, const char *prefix,
 			struct unit_test *tests, int count,
-			const char *select_name)
+			const char *select_name, const char *test_insert)
 {
-	struct unit_test *test;
+	struct unit_test *test, *one;
 	int found = 0;
+	int pos = 0;
+	int upto;
 
-	for (test = tests; test < tests + count; test++) {
+	one = NULL;
+	if (test_insert) {
+		char *p;
+
+		pos = dectoul(test_insert, NULL);
+		p = strchr(test_insert, ':');
+		if (p)
+			p++;
+
+		for (test = tests; test < tests + count; test++) {
+			if (!strcmp(p, test->name))
+				one = test;
+		}
+	}
+
+	for (upto = 0, test = tests; test < tests + count; test++, upto++) {
 		const char *test_name = test->name;
-		int ret;
+		int ret, i, old_fail_count;
 
 		if (!test_matches(prefix, test_name, select_name))
 			continue;
-		ret = ut_run_test_live_flat(uts, test, select_name);
+
+		if (test->flags & UTF_MANUAL) {
+			int len;
+
+			/*
+			 * manual tests must have a name ending "_norun" as this
+			 * is how pytest knows to skip them. See
+			 * generate_ut_subtest() for this check.
+			 */
+			len = strlen(test_name);
+			if (len < 6 || strcmp(test_name + len - 6, "_norun")) {
+				printf("Test '%s' is manual so must have a name ending in _norun\n",
+				       test_name);
+				uts->fail_count++;
+				return -EBADF;
+			}
+			if (!uts->force_run) {
+				if (select_name) {
+					printf("Test '%s' skipped as it is manual (use -f to run it)\n",
+					       test_name);
+				}
+				continue;
+			}
+		}
+		old_fail_count = uts->fail_count;
+
+		if (one && upto == pos) {
+			ret = ut_run_test_live_flat(uts, one);
+			if (uts->fail_count != old_fail_count) {
+				printf("Test '%s' failed %d times (position %d)\n",
+				       one->name,
+				       uts->fail_count - old_fail_count, pos);
+			}
+			return -EBADF;
+		}
+
+		for (i = 0; i < uts->runs_per_test; i++)
+			ret = ut_run_test_live_flat(uts, test);
+		if (uts->fail_count != old_fail_count) {
+			printf("Test '%s' failed %d times\n", test_name,
+			       uts->fail_count - old_fail_count);
+		}
 		found++;
 		if (ret == -EAGAIN)
 			continue;
@@ -401,14 +661,15 @@ static int ut_run_tests(struct unit_test_state *uts, const char *prefix,
 }
 
 int ut_run_list(const char *category, const char *prefix,
-		struct unit_test *tests, int count, const char *select_name)
+		struct unit_test *tests, int count, const char *select_name,
+		int runs_per_test, bool force_run, const char *test_insert)
 {
 	struct unit_test_state uts = { .fail_count = 0 };
 	bool has_dm_tests = false;
 	int ret;
 
 	if (!CONFIG_IS_ENABLED(OF_PLATDATA) &&
-	    ut_list_has_dm_tests(tests, count)) {
+	    ut_list_has_dm_tests(tests, count, prefix, select_name)) {
 		has_dm_tests = true;
 		/*
 		 * If we have no device tree, or it only has a root node, then
@@ -425,16 +686,34 @@ int ut_run_list(const char *category, const char *prefix,
 		printf("Running %d %s tests\n", count, category);
 
 	uts.of_root = gd_of_root();
-	ret = ut_run_tests(&uts, prefix, tests, count, select_name);
-
-	if (ret == -ENOENT)
-		printf("Test '%s' not found\n", select_name);
-	else
-		printf("Failures: %d\n", uts.fail_count);
+	uts.runs_per_test = runs_per_test;
+	if (fdt_action() == FDTCHK_COPY && gd->fdt_blob) {
+		uts.fdt_size = fdt_totalsize(gd->fdt_blob);
+		uts.fdt_copy = os_malloc(uts.fdt_size);
+		if (!uts.fdt_copy) {
+			printf("Out of memory for device tree copy\n");
+			return -ENOMEM;
+		}
+		memcpy(uts.fdt_copy, gd->fdt_blob, uts.fdt_size);
+	}
+	uts.force_run = force_run;
+	ret = ut_run_tests(&uts, prefix, tests, count, select_name,
+			   test_insert);
 
 	/* Best efforts only...ignore errors */
 	if (has_dm_tests)
 		dm_test_restore(uts.of_root);
+	if (IS_ENABLED(CONFIG_SANDBOX)) {
+		os_free(uts.fdt_copy);
+		os_free(uts.other_fdt);
+	}
+
+	if (uts.skip_count)
+		printf("Skipped: %d, ", uts.skip_count);
+	if (ret == -ENOENT)
+		printf("Test '%s' not found\n", select_name);
+	else
+		printf("Failures: %d\n", uts.fail_count);
 
 	return ret;
 }

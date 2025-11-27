@@ -6,7 +6,6 @@
  */
 
 #include <clk.h>
-#include <common.h>
 #include <memalign.h>
 #include <wait_bit.h>
 #include <asm/io.h>
@@ -19,43 +18,29 @@
 #include "cadence_qspi.h"
 #include <dt-bindings/power/xlnx-versal-power.h>
 
-#define CMD_4BYTE_READ  0x13
-#define CMD_4BYTE_FAST_READ  0x0C
-#define CMD_4BYTE_OCTAL_READ 0x7c
-
-void cadence_qspi_apb_enable_linear_mode(bool enable)
-{
-	if (CONFIG_IS_ENABLED(ZYNQMP_FIRMWARE)) {
-		if (enable)
-			/* ahb read mode */
-			xilinx_pm_request(PM_IOCTL, PM_DEV_OSPI,
-					  IOCTL_OSPI_MUX_SELECT,
-					  PM_OSPI_MUX_SEL_LINEAR, 0, NULL);
-		else
-			/* DMA mode */
-			xilinx_pm_request(PM_IOCTL, PM_DEV_OSPI,
-					  IOCTL_OSPI_MUX_SELECT,
-					  PM_OSPI_MUX_SEL_DMA, 0, NULL);
-	} else {
-		if (enable)
-			writel(readl(VERSAL_AXI_MUX_SEL) |
-			       VERSAL_OSPI_LINEAR_MODE, VERSAL_AXI_MUX_SEL);
-		else
-			writel(readl(VERSAL_AXI_MUX_SEL) &
-			       ~VERSAL_OSPI_LINEAR_MODE, VERSAL_AXI_MUX_SEL);
-	}
-}
-
 int cadence_qspi_apb_dma_read(struct cadence_spi_priv *priv,
-			      unsigned int n_rx, u8 *rxbuf)
+			      const struct spi_mem_op *op)
 {
-	u32 reg, ret, rx_rem, bytes_to_dma, data;
-	u8 opcode, addr_bytes, dummy_cycles, unaligned_byte;
+	u32 reg, ret, rx_rem, n_rx, bytes_to_dma, data, status;
+	u8 opcode, addr_bytes, *rxbuf, dummy_cycles, unaligned_byte;
 
+	n_rx = op->data.nbytes;
+
+	if (op->addr.dtr && (op->addr.val % 2)) {
+		n_rx += 1;
+		writel(op->addr.val & ~0x1,
+		       priv->regbase + CQSPI_REG_INDIRECTRDSTARTADDR);
+	}
+
+	rxbuf = op->data.buf.in;
 	rx_rem = n_rx % 4;
 	bytes_to_dma = n_rx - rx_rem;
 
 	if (bytes_to_dma) {
+		if (priv->use_dac_mode)
+			clrbits_le32(priv->regbase + CQSPI_REG_CONFIG,
+				     CQSPI_REG_CONFIG_DIRECT);
+
 		cadence_qspi_apb_enable_linear_mode(false);
 		reg = readl(priv->regbase + CQSPI_REG_CONFIG);
 		reg |= CQSPI_REG_CONFIG_ENBL_DMA;
@@ -65,10 +50,16 @@ int cadence_qspi_apb_dma_read(struct cadence_spi_priv *priv,
 
 		writel(CQSPI_DFLT_INDIR_TRIG_ADDR_RANGE,
 		       priv->regbase + CQSPI_REG_INDIR_TRIG_ADDR_RANGE);
+		/* Clear all interrupts. */
+		writel(CQSPI_IRQ_STATUS_MASK, priv->regbase + CQSPI_REG_IRQSTATUS);
+		/* Enable DMA done interrupt */
+		writel(CQSPI_DMA_DST_DONE_MASK, priv->regbase + CQSPI_DMA_DST_I_ENBL_REG);
 		writel(CQSPI_DFLT_DMA_PERIPH_CFG,
 		       priv->regbase + CQSPI_REG_DMA_PERIPH_CFG);
-		writel((unsigned long)rxbuf, priv->regbase +
+		writel(lower_32_bits((unsigned long)rxbuf), priv->regbase +
 		       CQSPI_DMA_DST_ADDR_REG);
+		writel(upper_32_bits((unsigned long)rxbuf), priv->regbase +
+		       CQSPI_DMA_DST_ADDR_MSB_REG);
 		writel(priv->trigger_address, priv->regbase +
 		       CQSPI_DMA_SRC_RD_ADDR_REG);
 		writel(bytes_to_dma, priv->regbase +
@@ -86,6 +77,8 @@ int cadence_qspi_apb_dma_read(struct cadence_spi_priv *priv,
 		if (ret)
 			return ret;
 
+		/* Disable DMA interrupt */
+		writel(0x0, priv->regbase + CQSPI_DMA_DST_I_DISBL_REG);
 		/* Clear indirect completion status */
 		writel(CQSPI_REG_INDIRECTRD_DONE, priv->regbase +
 		       CQSPI_REG_INDIRECTRD);
@@ -109,6 +102,15 @@ int cadence_qspi_apb_dma_read(struct cadence_spi_priv *priv,
 		if (opcode == CMD_4BYTE_OCTAL_READ &&
 		    priv->edge_mode != CQSPI_EDGE_MODE_DDR)
 			opcode = CMD_4BYTE_FAST_READ;
+
+		/* Set up command opcode extension. */
+		status = readl(priv->regbase + CQSPI_REG_CONFIG);
+		if (status & CQSPI_REG_CONFIG_DTR_PROTO) {
+			ret = cadence_qspi_setup_opcode_ext(priv, op,
+							    CQSPI_REG_OP_EXT_STIG_LSB);
+			if (ret)
+				return ret;
+		}
 
 		reg = opcode << CQSPI_REG_CMDCTRL_OPCODE_LSB;
 		reg |= (0x1 << CQSPI_REG_CMDCTRL_RD_EN_LSB);
@@ -135,6 +137,14 @@ int cadence_qspi_apb_dma_read(struct cadence_spi_priv *priv,
 		memcpy(rxbuf, &data, rx_rem);
 	}
 
+	if (op->addr.dtr && (op->addr.val % 2)) {
+		rxbuf -= bytes_to_dma;
+		memcpy(rxbuf, rxbuf + 1, n_rx - 1);
+	}
+
+	if (priv->use_dac_mode)
+		cadence_qspi_apb_dac_mode_enable(priv->regbase);
+
 	return 0;
 }
 
@@ -153,6 +163,11 @@ int cadence_qspi_apb_wait_for_dma_cmplt(struct cadence_spi_priv *priv)
 
 	writel(readl(priv->regbase + CQSPI_DMA_DST_I_STS_REG),
 	       priv->regbase + CQSPI_DMA_DST_I_STS_REG);
+
+	while ((readl(priv->regbase + CQSPI_DMA_DST_STS_REG) &
+		CQSPI_DMA_DST_STS_BUSY) && timeout--)
+		udelay(1);
+
 	return 0;
 }
 
@@ -162,11 +177,11 @@ static const struct soc_attr matches[] = {
 };
 
 /*
- * cadence_qspi_versal_set_dll_mode checks for silicon version
+ * cadence_qspi_set_dll_mode checks for silicon version
  * and set the DLL mode.
- * Returns 0 incase of success, -ENOTSUPP in case of failure.
+ * Returns 0 in case of success, -ENOTSUPP in case of failure.
  */
-int cadence_qspi_versal_set_dll_mode(struct udevice *dev)
+int cadence_qspi_set_dll_mode(struct udevice *dev)
 {
 	struct cadence_spi_priv *priv = dev_get_priv(dev);
 	const struct soc_attr *attr;
@@ -180,20 +195,20 @@ int cadence_qspi_versal_set_dll_mode(struct udevice *dev)
 	return -ENOTSUPP;
 }
 
-int cadence_spi_versal_ctrl_reset(struct cadence_spi_priv *priv)
+int cadence_spi_ctrl_reset(struct cadence_spi_priv *priv)
 {
 	int ret;
 
 	if (CONFIG_IS_ENABLED(ZYNQMP_FIRMWARE)) {
 		/* Assert ospi controller */
-		ret = reset_assert(priv->resets.resets);
+		ret = reset_assert(priv->resets->resets);
 		if (ret)
 			return ret;
 
 		udelay(10);
 
 		/* Deassert ospi controller */
-		ret = reset_deassert(priv->resets.resets);
+		ret = reset_deassert(priv->resets->resets);
 		if (ret)
 			return ret;
 	} else {
@@ -209,87 +224,93 @@ int cadence_spi_versal_ctrl_reset(struct cadence_spi_priv *priv)
 	return 0;
 }
 
-#if defined(CONFIG_DM_GPIO)
-int cadence_spi_versal_flash_reset(struct udevice *dev)
-{
-	struct gpio_desc gpio;
-	u32 reset_gpio;
-	int ret;
-
-	/* request gpio and set direction as output set to 1 */
-	ret = gpio_request_by_name(dev, "reset-gpios", 0, &gpio,
-				   GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE);
-	if (ret) {
-		printf("%s: unable to reset ospi flash device", __func__);
-		return ret;
-	}
-
-	reset_gpio = PMIO_NODE_ID_BASE + gpio.offset;
-
-	/* Request for pin */
-	xilinx_pm_request(PM_PINCTRL_REQUEST, reset_gpio, 0, 0, 0, NULL);
-
-	/* Enable hysteresis in cmos receiver */
-	xilinx_pm_request(PM_PINCTRL_CONFIG_PARAM_SET, reset_gpio,
-			  PM_PINCTRL_CONFIG_SCHMITT_CMOS,
-			  PM_PINCTRL_INPUT_TYPE_SCHMITT, 0, NULL);
-
-	/* Disable Tri-state */
-	xilinx_pm_request(PM_PINCTRL_CONFIG_PARAM_SET, reset_gpio,
-			  PM_PINCTRL_CONFIG_TRI_STATE,
-			  PM_PINCTRL_TRI_STATE_DISABLE, 0, NULL);
-	udelay(1);
-
-	/* Set value 0 to pin */
-	dm_gpio_set_value(&gpio, 0);
-	udelay(1);
-
-	/* Set value 1 to pin */
-	dm_gpio_set_value(&gpio, 1);
-	udelay(1);
-
-	return 0;
-}
-#else
-#define FLASH_RESET_GPIO	0xC
-int cadence_spi_versal_flash_reset(struct udevice *dev)
+#if !CONFIG_IS_ENABLED(DM_GPIO)
+int cadence_qspi_flash_reset(struct udevice *dev)
 {
 	/* CRP WPROT */
-	writel(0, 0xf126001c);
+	writel(0, WPROT_CRP);
 	/* GPIO Reset */
-	writel(0, 0xf1260318);
+	writel(0, RST_GPIO);
 
 	/* disable IOU write protection */
-	writel(0, 0xff080728);
+	writel(0, WPROT_LPD_MIO);
 
 	/* set direction as output */
-	writel((readl(0xf1020204) | BIT(FLASH_RESET_GPIO)), 0xf1020204);
+	writel((readl(BOOT_MODE_DIR) | BIT(FLASH_RESET_GPIO)),
+	       BOOT_MODE_DIR);
 
 	/* Data output enable */
-	writel((readl(0xf1020208) | BIT(FLASH_RESET_GPIO)), 0xf1020208);
+	writel((readl(BOOT_MODE_OUT) | BIT(FLASH_RESET_GPIO)),
+	       BOOT_MODE_OUT);
 
 	/* IOU SLCR write enable */
-	writel(0, 0xf1060828);
+	writel(0, WPROT_PMC_MIO);
 
 	/* set MIO as GPIO */
-	writel(0x60, 0xf1060030);
+	writel(0x60, MIO_PIN_12);
 
 	/* Set value 1 to pin */
-	writel((readl(0xf1020040) | BIT(FLASH_RESET_GPIO)), 0xf1020040);
+	writel((readl(BANK0_OUTPUT) | BIT(FLASH_RESET_GPIO)), BANK0_OUTPUT);
 	udelay(10);
 
 	/* Disable Tri-state */
-	writel((readl(0xf1060200) & ~BIT(FLASH_RESET_GPIO)), 0xf1060200);
-	udelay(1);
+	writel((readl(BANK0_TRI) & ~BIT(FLASH_RESET_GPIO)), BANK0_TRI);
+	udelay(5);
 
 	/* Set value 0 to pin */
-	writel((readl(0xf1020040) & ~BIT(FLASH_RESET_GPIO)), 0xf1020040);
-	udelay(10);
+	writel((readl(BANK0_OUTPUT) & ~BIT(FLASH_RESET_GPIO)), BANK0_OUTPUT);
+	udelay(150);
 
 	/* Set value 1 to pin */
-	writel((readl(0xf1020040) | BIT(FLASH_RESET_GPIO)), 0xf1020040);
-	udelay(10);
+	writel((readl(BANK0_OUTPUT) | BIT(FLASH_RESET_GPIO)), BANK0_OUTPUT);
+	udelay(1200);
 
 	return 0;
 }
 #endif
+
+void cadence_qspi_apb_enable_linear_mode(bool enable)
+{
+	if (IS_ENABLED(CONFIG_ZYNQMP_FIRMWARE)) {
+		if (enable)
+			/* ahb read mode */
+			xilinx_pm_request(PM_IOCTL, PM_DEV_OSPI,
+					  IOCTL_OSPI_MUX_SELECT,
+					  PM_OSPI_MUX_SEL_LINEAR, 0, 0, 0, NULL);
+		else
+			/* DMA mode */
+			xilinx_pm_request(PM_IOCTL, PM_DEV_OSPI,
+					  IOCTL_OSPI_MUX_SELECT,
+					  PM_OSPI_MUX_SEL_DMA, 0, 0, 0, NULL);
+	} else {
+		if (enable)
+			writel(readl(VERSAL_AXI_MUX_SEL) |
+			       VERSAL_OSPI_LINEAR_MODE, VERSAL_AXI_MUX_SEL);
+		else
+			writel(readl(VERSAL_AXI_MUX_SEL) &
+			       ~VERSAL_OSPI_LINEAR_MODE, VERSAL_AXI_MUX_SEL);
+	}
+}
+
+int cadence_device_reset(struct udevice *bus)
+{
+	struct cadence_spi_priv *priv = dev_get_priv(bus);
+	u32 reg;
+
+	reg = readl(priv->regbase + CQSPI_REG_CONFIG);
+	reg |= CQSPI_REG_CONFIG_RESET_CFG_FLD_MASK;
+	writel(reg, priv->regbase + CQSPI_REG_CONFIG);
+
+	/*
+	 * NOTE: Delay timing implementation is derived from
+	 * spi_nor_hw_reset()
+	 */
+	writel(reg & ~CQSPI_REG_CONFIG_RESET_PIN_FLD_MASK, priv->regbase + CQSPI_REG_CONFIG);
+	udelay(5);
+	writel(reg | CQSPI_REG_CONFIG_RESET_PIN_FLD_MASK, priv->regbase + CQSPI_REG_CONFIG);
+	udelay(150);
+	writel(reg & ~CQSPI_REG_CONFIG_RESET_PIN_FLD_MASK, priv->regbase + CQSPI_REG_CONFIG);
+	udelay(1200);
+
+	return 0;
+}

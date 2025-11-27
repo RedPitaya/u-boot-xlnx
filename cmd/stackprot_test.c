@@ -3,7 +3,6 @@
  *  Copyright 2021 Broadcom
  */
 
-#include <common.h>
 #include <command.h>
 
 static int do_test_stackprot_fail(struct cmd_tbl *cmdtp, int flag, int argc,
@@ -17,7 +16,8 @@ static int do_test_stackprot_fail(struct cmd_tbl *cmdtp, int flag, int argc,
 
 	memset(a, 0xa5, 512);
 
-	printf("We have smashed our stack as this should not exceed 128: sizeof(a) = %ld\n", strlen(a));
+	printf("We have smashed our stack as this should not exceed 128: sizeof(a) = %zd\n",
+	       strlen(a));
 
 	return 0;
 }

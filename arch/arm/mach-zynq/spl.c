@@ -2,7 +2,6 @@
 /*
  * (C) Copyright 2014 - 2017 Xilinx, Inc. Michal Simek
  */
-#include <common.h>
 #include <debug_uart.h>
 #include <hang.h>
 #include <image.h>
@@ -16,21 +15,24 @@
 #include <asm/arch/sys_proto.h>
 #include <asm/arch/ps7_init_gpl.h>
 
-void board_init_f(ulong dummy)
+#if defined(CONFIG_DEBUG_UART_BOARD_INIT)
+void board_debug_uart_init(void)
 {
 	ps7_init();
+}
+#endif
+
+void board_init_f(ulong dummy)
+{
+#if !defined(CONFIG_DEBUG_UART_BOARD_INIT)
+	ps7_init();
+#endif
 
 	arch_cpu_init();
-
-#ifdef CONFIG_DEBUG_UART
-	/* Uart debug for sure */
-	debug_uart_init();
-	puts("Debug uart enabled\n"); /* or printch() */
-#endif
 }
 
-#ifdef CONFIG_SPL_BOARD_INIT
-void spl_board_init(void)
+#ifdef CONFIG_SPL_SOC_INIT
+void spl_soc_init(void)
 {
 	preloader_console_init();
 #if defined(CONFIG_ARCH_EARLY_INIT_R) && defined(CONFIG_SPL_FPGA)

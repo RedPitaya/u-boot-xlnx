@@ -4,7 +4,6 @@
  * Reinhard Pfau, Guntermann & Drunck GmbH, reinhard.pfau@gdsys.cc
  */
 
-#include <common.h>
 #include <log.h>
 #include <malloc.h>
 #include <fs.h>
@@ -15,7 +14,6 @@
 #include <u-boot/sha1.h>
 #include <asm/byteorder.h>
 #include <asm/unaligned.h>
-#include <pca9698.h>
 
 #include "hre.h"
 
@@ -98,7 +96,7 @@ static const uint8_t vendor[] = "Guntermann & Drunck";
  * @param tpm		TPM device
  * @param index	NV index of the area to get size for
  * @param size	pointer to the size
- * @return 0 on success, != 0 on error
+ * Return: 0 on success, != 0 on error
  */
 static int get_tpm_nv_size(struct udevice *tpm, uint32_t index, uint32_t *size)
 {
@@ -135,7 +133,7 @@ static int get_tpm_nv_size(struct udevice *tpm, uint32_t index, uint32_t *size)
  * @param auth	usage auth of the key to search for
  * @param pubkey_digest	(SHA1) hash of the pub key structure of the key
  * @param[out] handle	the handle of the key iff found
- * @return 0 if key was found in TPM; != 0 if not.
+ * Return: 0 if key was found in TPM; != 0 if not.
  */
 static int find_key(struct udevice *tpm, const uint8_t auth[20],
 		    const uint8_t pubkey_digest[20], uint32_t *handle)
@@ -168,7 +166,7 @@ static int find_key(struct udevice *tpm, const uint8_t auth[20],
 			return -1;
 		if (err)
 			continue;
-		sha1_csum(buf, buf_len, digest);
+		sha1_csum_wd(buf, buf_len, digest, SHA1_DEF_CHUNK_SZ);
 		if (!memcmp(digest, pubkey_digest, 20)) {
 			*handle = key_handles[i];
 			return 0;
@@ -180,7 +178,7 @@ static int find_key(struct udevice *tpm, const uint8_t auth[20],
 /**
  * @brief read CCDM common data from TPM NV
  * @param tpm		TPM device
- * @return 0 if CCDM common data was found and read, !=0 if something failed.
+ * Return: 0 if CCDM common data was found and read, !=0 if something failed.
  */
 static int read_common_data(struct udevice *tpm)
 {
@@ -216,7 +214,7 @@ static int read_common_data(struct udevice *tpm)
 /**
  * @brief get pointer to  hash register by specification
  * @param spec	specification of a hash register
- * @return pointer to hash register or NULL if @a spec does not qualify a
+ * Return: pointer to hash register or NULL if @a spec does not qualify a
  * valid hash register; NULL else.
  */
 static struct h_reg *get_hreg(uint8_t spec)
@@ -245,7 +243,7 @@ static struct h_reg *get_hreg(uint8_t spec)
  * @param tpm		TPM device
  * @param spec	specification of a hash register
  * @param mode	access mode (read or write or read/write)
- * @return pointer to hash register if found and valid; NULL else.
+ * Return: pointer to hash register if found and valid; NULL else.
  *
  * This func uses @a get_reg() to determine the hash register for a given spec.
  * If a register is found it is validated according to the desired access mode.
@@ -372,7 +370,7 @@ static int hre_op_loadkey(struct udevice *tpm, struct h_reg *src_reg,
  * @param tpm		TPM device
  * @param[in,out] ip	pointer to the opcode (instruction pointer)
  * @param[in,out] code_size	(remaining) size of the code
- * @return new instruction pointer on success, NULL on error.
+ * Return: new instruction pointer on success, NULL on error.
  */
 static const uint8_t *hre_execute_op(struct udevice *tpm, const uint8_t **ip,
 				     size_t *code_size)
@@ -497,7 +495,7 @@ end:
  * @param tpm		TPM device
  * @param code		pointer to the (HRE) code.
  * @param code_size	size of the code (in bytes).
- * @return 0 on success, != 0 on failure.
+ * Return: 0 on success, != 0 on failure.
  */
 int hre_run_program(struct udevice *tpm, const uint8_t *code, size_t code_size)
 {

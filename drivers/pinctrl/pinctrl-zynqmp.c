@@ -3,12 +3,11 @@
  * Xilinx pinctrl driver for ZynqMP
  *
  * Author(s):   Ashok Reddy Soma <ashok.reddy.soma@xilinx.com>
- *              Michal Simek <michal.simek@xilinx.com>
+ *              Michal Simek <michal.simek@amd.com>
  *
  * Copyright (C) 2021 Xilinx, Inc. All rights reserved.
  */
 
-#include <common.h>
 #include <dm.h>
 #include <errno.h>
 #include <malloc.h>
@@ -73,7 +72,7 @@ struct zynqmp_pinctrl_config {
 
 /**
  * enum zynqmp_pin_config_param - possible pin configuration parameters
- * @PIN_CONFIG_IOSTANDARD:	if the pin can select an IO standard,
+ * @PIN_CFG_IOSTANDARD:	if the pin can select an IO standard,
  *				the argument to this parameter (on a
  *				custom format) tells the driver which
  *				alternative IO standard to use
@@ -81,7 +80,7 @@ struct zynqmp_pinctrl_config {
  *				to select schmitt or cmos input for MIO pins
  */
 enum zynqmp_pin_config_param {
-	PIN_CONFIG_IOSTANDARD = PIN_CONFIG_END + 1,
+	PIN_CFG_IOSTANDARD = PIN_CONFIG_END + 1,
 	PIN_CONFIG_SCHMITTCMOS,
 };
 
@@ -128,7 +127,8 @@ static int zynqmp_pm_query_data(enum pm_query_id qid, u32 arg1, u32 arg2, u32 *o
 	int ret;
 	u32 ret_payload[PAYLOAD_ARG_CNT];
 
-	ret = xilinx_pm_request(PM_QUERY_DATA, qid, arg1, arg2, 0, ret_payload);
+	ret = xilinx_pm_request(PM_QUERY_DATA, qid, arg1, arg2, 0, 0,
+				0, ret_payload);
 	if (ret)
 		return ret;
 
@@ -143,7 +143,8 @@ static int zynqmp_pm_pinctrl_get_config(const u32 pin, const u32 param, u32 *val
 	u32 ret_payload[PAYLOAD_ARG_CNT];
 
 	/* Get config for the pin */
-	ret = xilinx_pm_request(PM_PINCTRL_CONFIG_PARAM_GET, pin, param, 0, 0, ret_payload);
+	ret = xilinx_pm_request(PM_PINCTRL_CONFIG_PARAM_GET, pin, param, 0, 0, 0,
+				0, ret_payload);
 	if (ret) {
 		printf("%s failed\n", __func__);
 		return ret;
@@ -158,15 +159,22 @@ static int zynqmp_pm_pinctrl_set_config(const u32 pin, const u32 param, u32 valu
 {
 	int ret;
 
+	if (param == PM_PINCTRL_CONFIG_TRI_STATE) {
+		ret = zynqmp_pm_feature(PM_PINCTRL_CONFIG_PARAM_SET);
+		if (ret < PM_PINCTRL_PARAM_SET_VERSION)
+			return -EOPNOTSUPP;
+	}
+
 	/* Request the pin first */
-	ret = xilinx_pm_request(PM_PINCTRL_REQUEST, pin, 0, 0, 0, NULL);
+	ret = xilinx_pm_request(PM_PINCTRL_REQUEST, pin, 0, 0, 0, 0, 0, NULL);
 	if (ret) {
 		printf("%s: pin request failed\n", __func__);
 		return ret;
 	}
 
 	/* Set config for the pin */
-	ret = xilinx_pm_request(PM_PINCTRL_CONFIG_PARAM_SET, pin, param, value, 0, NULL);
+	ret = xilinx_pm_request(PM_PINCTRL_CONFIG_PARAM_SET, pin, param, value,
+				0, 0, 0, NULL);
 	if (ret) {
 		printf("%s failed\n", __func__);
 		return ret;
@@ -181,7 +189,7 @@ static int zynqmp_pinctrl_get_function_groups(u32 fid, u32 index, u16 *groups)
 	u32 ret_payload[PAYLOAD_ARG_CNT];
 
 	ret = xilinx_pm_request(PM_QUERY_DATA, PM_QID_PINCTRL_GET_FUNCTION_GROUPS,
-				fid, index, 0, ret_payload);
+				fid, index, 0, 0, 0, ret_payload);
 	if (ret) {
 		printf("%s failed\n", __func__);
 		return ret;
@@ -237,7 +245,7 @@ static int zynqmp_pinctrl_get_pin_groups(u32 pin, u32 index, u16 *groups)
 	u32 ret_payload[PAYLOAD_ARG_CNT];
 
 	ret = xilinx_pm_request(PM_QUERY_DATA, PM_QID_PINCTRL_GET_PIN_GROUPS,
-				pin, index, 0, ret_payload);
+				pin, index, 0, 0, 0, ret_payload);
 	if (ret) {
 		printf("%s failed to get pin groups\n", __func__);
 		return ret;
@@ -308,13 +316,13 @@ static int zynqmp_pinctrl_probe(struct udevice *dev)
 	for (i = 0; i < priv->nfuncs; i++) {
 		/* Get function name for the function and fill */
 		xilinx_pm_request(PM_QUERY_DATA, PM_QID_PINCTRL_GET_FUNCTION_NAME,
-				  i, 0, 0, ret_payload);
+				  i, 0, 0, 0, 0, ret_payload);
 
 		memcpy((void *)priv->funcs[i].name, ret_payload, MAX_FUNC_NAME_LEN);
 
 		/* And fill number of groups available for certain function */
 		xilinx_pm_request(PM_QUERY_DATA, PM_QID_PINCTRL_GET_NUM_FUNCTION_GROUPS,
-				  i, 0, 0, ret_payload);
+				  i, 0, 0, 0, 0, ret_payload);
 
 		priv->funcs[i].ngroups = ret_payload[1];
 		priv->ngroups += priv->funcs[i].ngroups;
@@ -365,7 +373,8 @@ static int zynqmp_pinmux_set(struct udevice *dev, unsigned int selector,
 	int ret;
 
 	/* Request the pin first */
-	ret = xilinx_pm_request(PM_PINCTRL_REQUEST, selector, 0, 0, 0, NULL);
+	ret = xilinx_pm_request(PM_PINCTRL_REQUEST, selector, 0, 0, 0, 0,
+				0, NULL);
 	if (ret) {
 		printf("%s: pin request failed\n", __func__);
 		return ret;
@@ -373,7 +382,7 @@ static int zynqmp_pinmux_set(struct udevice *dev, unsigned int selector,
 
 	/* Set the pin function */
 	ret = xilinx_pm_request(PM_PINCTRL_SET_FUNCTION, selector, func_selector,
-				0, 0, NULL);
+				0, 0, 0, 0, NULL);
 	if (ret) {
 		printf("%s: Failed to set pinmux function\n", __func__);
 		return ret;
@@ -452,7 +461,7 @@ static int zynqmp_pinconf_set(struct udevice *dev, unsigned int pin,
 		param = PM_PINCTRL_CONFIG_DRIVE_STRENGTH;
 		ret = zynqmp_pm_pinctrl_set_config(pin, param, value);
 		break;
-	case PIN_CONFIG_IOSTANDARD:
+	case PIN_CFG_IOSTANDARD:
 		param = PM_PINCTRL_CONFIG_VOLTAGE_STATUS;
 		ret = zynqmp_pm_pinctrl_get_config(pin, param, &value);
 		if (arg != value)
@@ -542,6 +551,8 @@ static int zynqmp_pinctrl_get_pin_muxing(struct udevice *dev,
 				     &pinmux.drive_strength);
 	zynqmp_pm_pinctrl_get_config(selector, PM_PINCTRL_CONFIG_VOLTAGE_STATUS,
 				     &pinmux.volt_sts);
+	zynqmp_pm_pinctrl_get_config(selector, PM_PINCTRL_CONFIG_TRI_STATE,
+				     &pinmux.tri_state);
 
 	switch (pinmux.drive_strength) {
 	case PM_PINCTRL_DRIVE_STRENGTH_2MA:
@@ -562,13 +573,15 @@ static int zynqmp_pinctrl_get_pin_muxing(struct udevice *dev,
 		return -EINVAL;
 	}
 
-	snprintf(buf, size, "slew:%s\tbias:%s\tpull:%s\tinput:%s\tdrive:%dmA\tvolt:%s",
+	snprintf(buf, size,
+		 "slew:%s\tbias:%s\tpull:%s\tinput:%s\tdrive:%dmA\tvolt:%s\ttri_state:%s",
 		 pinmux.slew ? "slow" : "fast",
 		 pinmux.bias ? "enabled" : "disabled",
 		 pinmux.pull_ctrl ? "up" : "down",
 		 pinmux.input_type ? "schmitt" : "cmos",
 		 pinmux.drive_strength,
-		 pinmux.volt_sts ? "1.8" : "3.3");
+		 pinmux.volt_sts ? "1.8" : "3.3",
+		 pinmux.tri_state ? "enabled" : "disabled");
 
 	return 0;
 }
@@ -617,7 +630,7 @@ static const struct pinconf_param zynqmp_conf_params[] = {
 	{ "slew-rate", PIN_CONFIG_SLEW_RATE, 0 },
 	{ "skew-delay", PIN_CONFIG_SKEW_DELAY, 0 },
 	/* zynqmp specific */
-	{"io-standard", PIN_CONFIG_IOSTANDARD, IO_STANDARD_LVCMOS18},
+	{"io-standard", PIN_CFG_IOSTANDARD, IO_STANDARD_LVCMOS18},
 	{"schmitt-cmos", PIN_CONFIG_SCHMITTCMOS, PM_PINCTRL_INPUT_TYPE_SCHMITT},
 };
 

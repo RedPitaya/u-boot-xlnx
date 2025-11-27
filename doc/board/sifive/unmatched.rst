@@ -20,8 +20,11 @@ The support for following drivers are already enabled:
 4. SiFive SPI Driver.
 5. MMC SPI Driver for MMC/SD support.
 
-Booting from uSD using U-Boot SPL
----------------------------------
+Booting from micro SD card using U-Boot SPL
+-------------------------------------------
+
+Booting from an SD card requires that the boot mode selection DIP switches
+MSEL[3:0] are set to 1011.
 
 Building
 --------
@@ -53,8 +56,10 @@ Flashing
 ZSBL loads the U-Boot SPL (u-boot-spl.bin) from a partition with GUID type
 5B193300-FC78-40CD-8002-E86C45580B47
 
-U-Boot SPL expects u-boot.itb from a partition with GUID
-type 2E54B353-1271-4842-806F-E436D6AF6985
+With the default configuration U-Boot SPL expects u-boot.itb starting at sector
+2082 (CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x822). It is recommended to use a
+partition with type GUID 2E54B353-1271-4842-806F-E436D6AF6985 for storing
+main U-Boot.
 
 u-boot.itb is a combination of fw_dynamic.bin, u-boot-nodtb.bin and
 device tree blob (hifive-unmatched-a00.dtb)
@@ -553,11 +558,11 @@ for partitions one through three respectively.
 	    --new=3:10280:10535 --change-name=3:env   --typecode=3:3DE21764-95BD-54BD-A5C3-4ABE786F38A8 \
 	    /dev/mtdblock0
 
-Write U-boot SPL and U-boot to their partitions.
+Write U-Boot SPL and U-Boot to their partitions.
 
 .. code-block:: none
 
-	dd if=u-boot-spl.bin of=/dev/mtdblock0 bs=4096 seek=5 conv=sync
+	dd if=spl/u-boot-spl.bin of=/dev/mtdblock0 bs=4096 seek=5 conv=sync
 	dd if=u-boot.itb  of=/dev/mtdblock0 bs=4096 seek=261 conv=sync
 
 Power off the board.

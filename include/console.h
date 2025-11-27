@@ -33,7 +33,7 @@ int confirm_yesno(void);        /*  1 if input is "y", "Y", "yes" or "YES" */
  * Iterates over registered STDIO devices and match them with given @flags
  * and @name.
  *
- * @return pointer to the &struct stdio_dev if found, or NULL otherwise
+ * Return: pointer to the &struct stdio_dev if found, or NULL otherwise
  */
 struct stdio_dev *console_search_dev(int flags, const char *name);
 
@@ -44,7 +44,7 @@ struct stdio_dev *console_search_dev(int flags, const char *name);
  * This should be called as soon as malloc() is available so that the maximum
  * amount of console output can be recorded.
  *
- * @return 0 if OK, -ENOMEM if out of memory
+ * Return: 0 if OK, -ENOMEM if out of memory
  */
 int console_record_init(void);
 
@@ -60,7 +60,7 @@ void console_record_reset(void);
  *
  * This should be called to enable the console buffer.
  *
- * @return 0 (always)
+ * Return: 0 (always)
  */
 int console_record_reset_enable(void);
 
@@ -72,17 +72,24 @@ int console_record_reset_enable(void);
  *
  * @str: Place to put string
  * @maxlen: Maximum length of @str including nul terminator
- * @return length of string returned, or -ENOSPC if the console buffer was
- *	overflowed by the output
+ * Return: length of string returned, or -ENOSPC if the console buffer was
+ *	overflowed by the output, or -ENOENT if there was nothing to read
  */
 int console_record_readline(char *str, int maxlen);
 
 /**
  * console_record_avail() - Get the number of available bytes in console output
  *
- * @return available bytes (0 if empty)
+ * Return: available bytes (0 if empty)
  */
 int console_record_avail(void);
+
+/**
+ * console_record_isempty() - Returns if console output is empty
+ *
+ * Return: true if empty
+ */
+bool console_record_isempty(void);
 
 /**
  * console_in_puts() - Write a string to the console input buffer
@@ -91,7 +98,7 @@ int console_record_avail(void);
  * returned if a function calls e.g. `getc()`
  *
  * @str: the string to write
- * @return  the number of bytes added
+ * Return:  the number of bytes added
  */
 int console_in_puts(const char *str);
 #else
@@ -131,6 +138,12 @@ static inline int console_in_puts(const char *str)
 	return 0;
 }
 
+static inline bool console_record_isempty(void)
+{
+	/* Always empty */
+	return true;
+}
+
 #endif /* !CONFIG_CONSOLE_RECORD */
 
 /**
@@ -141,7 +154,7 @@ static inline int console_in_puts(const char *str)
  * This function prints a banner on devices which (we assume) did not receive
  * it before relocation.
  *
- * @return 0 (meaning no errors)
+ * Return: 0 (meaning no errors)
  */
 int console_announce_r(void);
 
@@ -155,6 +168,24 @@ int console_announce_r(void);
  * @s: String to output
  */
 void console_puts_select_stderr(bool serial_only, const char *s);
+
+/**
+ * console_clear() - Clear the console
+ *
+ * Uses an ANSI sequence to clear the display, failing back to clearing the
+ * video display directly if !CONFIG_VIDEO_ANSI
+ *
+ * Return: 0 if OK, -ve on error
+ */
+int console_clear(void);
+
+/**
+ * console_remove_by_name() - Remove a console by its stdio name
+ *
+ * This must only be used in tests. It removes any use of the named stdio device
+ * from the console tables.
+ */
+int console_remove_by_name(const char *name);
 
 /*
  * CONSOLE multiplexing.

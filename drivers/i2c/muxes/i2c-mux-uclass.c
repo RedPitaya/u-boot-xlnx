@@ -6,7 +6,6 @@
 
 #define LOG_CATEGORY UCLASS_I2C_MUX
 
-#include <common.h>
 #include <dm.h>
 #include <errno.h>
 #include <i2c.h>
@@ -41,11 +40,14 @@ static int i2c_mux_child_post_bind(struct udevice *dev)
 	struct i2c_mux_bus *plat = dev_get_parent_plat(dev);
 	int channel;
 
-	channel = dev_read_u32_default(dev, "reg", -1);
-	if (channel < 0)
-		return -EINVAL;
-	plat->channel = channel;
+	ofnode node = dev_ofnode(dev);
 
+	if (ofnode_has_property(node, "reg")) {
+		channel = dev_read_u32_default(dev, "reg", -1);
+		if (channel < 0)
+			return -EINVAL;
+		plat->channel = channel;
+	}
 	return 0;
 }
 

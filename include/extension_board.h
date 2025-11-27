@@ -7,19 +7,21 @@
 #ifndef __EXTENSION_SUPPORT_H
 #define __EXTENSION_SUPPORT_H
 
+#include <linux/list.h>
+
 struct extension {
 	struct list_head list;
 	char name[32];
 	char owner[32];
 	char version[32];
-	char overlay[32];
+	char overlay[64];
 	char other[32];
 };
 
 /**
  * extension_board_scan - Add system-specific function to scan extension board.
  * @param extension_list	List of extension board information to update.
- * @return the number of extension.
+ * Return: the number of extension.
  *
  * This function is called if CONFIG_CMD_EXTENSION is defined.
  * Needs to fill the list extension_list with elements.

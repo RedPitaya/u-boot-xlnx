@@ -7,9 +7,10 @@
  */
 
 #include <config.h>
-#include <common.h>
 #include <cpu_func.h>
+#include <display_options.h>
 #include <dm.h>
+#include <dm/device_compat.h>
 #include <log.h>
 #include <net.h>
 #include <malloc.h>
@@ -107,9 +108,10 @@ struct axidma_plat {
 	struct eth_pdata eth_pdata;
 	struct axidma_reg *dmatx;
 	struct axidma_reg *dmarx;
+	int pcsaddr;
 	int phyaddr;
 	u8 eth_hasnobuf;
-	int phy_of_handle;
+	ofnode phynode;
 	enum emac_variant mactype;
 };
 
@@ -117,13 +119,14 @@ struct axidma_plat {
 struct axidma_priv {
 	struct axidma_reg *dmatx;
 	struct axidma_reg *dmarx;
+	int pcsaddr;
 	int phyaddr;
 	struct axi_regs *iobase;
 	phy_interface_t interface;
 	struct phy_device *phydev;
 	struct mii_dev *bus;
 	u8 eth_hasnobuf;
-	int phy_of_handle;
+	ofnode phynode;
 	enum emac_variant mactype;
 };
 
@@ -299,6 +302,13 @@ static int axiemac_phy_init(struct udevice *dev)
 	if (IS_ENABLED(CONFIG_DM_ETH_PHY))
 		priv->phyaddr = eth_phy_get_addr(dev);
 
+	/*
+	 * Set address of PCS/PMA PHY to the one pointed by phy-handle for
+	 * backward compatibility.
+	 */
+	if (priv->phyaddr != -1 && priv->pcsaddr == 0)
+		priv->pcsaddr = priv->phyaddr;
+
 	if (priv->phyaddr == -1) {
 		/* Detect the PHY address */
 		for (i = 31; i >= 0; i--) {
@@ -316,15 +326,58 @@ static int axiemac_phy_init(struct udevice *dev)
 
 	/* Interface - look at tsec */
 	phydev = phy_connect(priv->bus, priv->phyaddr, dev, priv->interface);
+	if (IS_ERR_OR_NULL(phydev)) {
+		dev_err(dev, "phy_connect() failed\n");
+		return -ENODEV;
+	}
 
 	phydev->supported &= supported;
 	phydev->advertising = phydev->supported;
 	priv->phydev = phydev;
-	if (priv->phy_of_handle)
-		priv->phydev->node = offset_to_ofnode(priv->phy_of_handle);
+	if (ofnode_valid(priv->phynode))
+		priv->phydev->node = priv->phynode;
 	phy_config(phydev);
 
 	return 0;
+}
+
+static int pcs_pma_startup(struct axidma_priv *priv)
+{
+	u32 rc, retry_cnt = 0;
+	u16 mii_reg;
+
+	rc = phyread(priv, priv->pcsaddr, MII_BMCR, &mii_reg);
+	if (rc)
+		goto failed_mdio;
+
+	if (!(mii_reg & BMCR_ANENABLE)) {
+		mii_reg |= BMCR_ANENABLE;
+		if (phywrite(priv, priv->pcsaddr, MII_BMCR, mii_reg))
+			goto failed_mdio;
+	}
+
+	/*
+	 * Check the internal PHY status and warn user if the link between it
+	 * and the external PHY is not obtained.
+	 */
+	debug("axiemac: waiting for link status of the PCS/PMA PHY");
+	while (retry_cnt * 10 < CONFIG_PHY_ANEG_TIMEOUT) {
+		rc = phyread(priv, priv->pcsaddr, MII_BMSR, &mii_reg);
+		if ((mii_reg & BMSR_LSTATUS) && mii_reg != 0xffff && !rc) {
+			debug(".Done\n");
+			return 0;
+		}
+		if ((retry_cnt++ % 10) == 0)
+			debug(".");
+		mdelay(10);
+	}
+	debug("\n");
+	printf("axiemac: Warning, PCS/PMA PHY@%d is not ready, link is down\n",
+	       priv->pcsaddr);
+	return 1;
+failed_mdio:
+	printf("axiemac: MDIO to the PCS/PMA PHY has failed\n");
+	return 1;
 }
 
 /* Setting axi emac and phy to proper setting */
@@ -342,12 +395,12 @@ static int setup_phy(struct udevice *dev)
 		 * after DMA and ethernet resets and hence
 		 * check and clear if set.
 		 */
-		ret = phyread(priv, priv->phyaddr, MII_BMCR, &temp);
+		ret = phyread(priv, priv->pcsaddr, MII_BMCR, &temp);
 		if (ret)
 			return 0;
 		if (temp & BMCR_ISOLATE) {
 			temp &= ~BMCR_ISOLATE;
-			ret = phywrite(priv, priv->phyaddr, MII_BMCR, temp);
+			ret = phywrite(priv, priv->pcsaddr, MII_BMCR, temp);
 			if (ret)
 				return 0;
 		}
@@ -357,6 +410,11 @@ static int setup_phy(struct udevice *dev)
 		printf("axiemac: could not initialize PHY %s\n",
 		       phydev->dev->name);
 		return 0;
+	}
+	if (priv->interface == PHY_INTERFACE_MODE_SGMII ||
+	    priv->interface == PHY_INTERFACE_MODE_1000BASEX) {
+		if (pcs_pma_startup(priv))
+			return 0;
 	}
 	if (!phydev->link) {
 		printf("%s: No link.\n", phydev->dev->name);
@@ -558,11 +616,11 @@ static int axiemac_start(struct udevice *dev)
 #endif
 	rx_bd.cntrl = sizeof(rxframe);
 	/* Flush the last BD so DMA core could see the updates */
-	flush_cache((phys_addr_t)&rx_bd, sizeof(rx_bd));
+	flush_cache((phys_addr_t)(uintptr_t)&rx_bd, sizeof(rx_bd));
 
 	/* It is necessary to flush rxframe because if you don't do it
 	 * then cache can contain uninitialized data */
-	flush_cache((phys_addr_t)&rxframe, sizeof(rxframe));
+	flush_cache((phys_addr_t)(uintptr_t)&rxframe, sizeof(rxframe));
 
 	/* Start the hardware */
 	temp = readl(&priv->dmarx->control);
@@ -614,7 +672,7 @@ static int axiemac_send(struct udevice *dev, void *ptr, int len)
 	}
 
 	/* Flush packet to main memory to be trasfered by DMA */
-	flush_cache((phys_addr_t)ptr, len);
+	flush_cache((phys_addr_t)(uintptr_t)ptr, len);
 
 	/* Setup Tx BD */
 	memset(&tx_bd, 0, sizeof(tx_bd));
@@ -630,7 +688,7 @@ static int axiemac_send(struct udevice *dev, void *ptr, int len)
 						XAXIDMA_BD_CTRL_TXEOF_MASK;
 
 	/* Flush the last BD so DMA core could see the updates */
-	flush_cache((phys_addr_t)&tx_bd, sizeof(tx_bd));
+	flush_cache((phys_addr_t)(uintptr_t)&tx_bd, sizeof(tx_bd));
 
 	if (readl(&priv->dmatx->status) & XAXIDMA_HALTED_MASK) {
 		u32 temp;
@@ -689,7 +747,7 @@ static int axiemac_recv(struct udevice *dev, int flags, uchar **packetp)
 
 	/* Wait for an incoming packet */
 	if (!isrxready(priv))
-		return -1;
+		return -EAGAIN;
 
 	debug("axiemac: RX data ready\n");
 
@@ -730,11 +788,11 @@ static int axiemac_free_pkt(struct udevice *dev, uchar *packet, int length)
 	rx_bd.cntrl = sizeof(rxframe);
 
 	/* Write bd to HW */
-	flush_cache((phys_addr_t)&rx_bd, sizeof(rx_bd));
+	flush_cache((phys_addr_t)(uintptr_t)&rx_bd, sizeof(rx_bd));
 
 	/* It is necessary to flush rxframe because if you don't do it
 	 * then cache will contain previous packet */
-	flush_cache((phys_addr_t)&rxframe, sizeof(rxframe));
+	flush_cache((phys_addr_t)(uintptr_t)&rxframe, sizeof(rxframe));
 
 	/* Rx BD is ready - start again */
 	axienet_dma_write(&rx_bd, &priv->dmarx->tail);
@@ -770,16 +828,17 @@ static int axi_emac_probe(struct udevice *dev)
 	struct axidma_priv *priv = dev_get_priv(dev);
 	int ret;
 
-	priv->iobase = (struct axi_regs *)pdata->iobase;
+	priv->iobase = (struct axi_regs *)(uintptr_t)pdata->iobase;
 	priv->dmatx = plat->dmatx;
 	/* RX channel offset is 0x30 */
-	priv->dmarx = (struct axidma_reg *)((phys_addr_t)priv->dmatx + 0x30);
+	priv->dmarx = (struct axidma_reg *)((uintptr_t)priv->dmatx + 0x30);
 	priv->mactype = plat->mactype;
 
 	if (priv->mactype == EMAC_1G) {
 		priv->eth_hasnobuf = plat->eth_hasnobuf;
+		priv->pcsaddr = plat->pcsaddr;
 		priv->phyaddr = plat->phyaddr;
-		priv->phy_of_handle = plat->phy_of_handle;
+		priv->phynode = plat->phynode;
 		priv->interface = pdata->phy_interface;
 
 		if (IS_ENABLED(CONFIG_DM_ETH_PHY))
@@ -834,21 +893,20 @@ static int axi_emac_of_to_plat(struct udevice *dev)
 {
 	struct axidma_plat *plat = dev_get_plat(dev);
 	struct eth_pdata *pdata = &plat->eth_pdata;
-	int node = dev_of_offset(dev);
-	int offset = 0;
-	const char *phy_mode;
+	struct ofnode_phandle_args pcs_node, axistream_node;
+	ofnode phynode;
+	int ret;
 
 	pdata->iobase = dev_read_addr(dev);
 	plat->mactype = dev_get_driver_data(dev);
 
-	offset = fdtdec_lookup_phandle(gd->fdt_blob, node,
-				       "axistream-connected");
-	if (offset <= 0) {
-		printf("%s: axistream is not found\n", __func__);
-		return -EINVAL;
-	}
-	plat->dmatx = (struct axidma_reg *)fdtdec_get_addr(gd->fdt_blob,
-							  offset, "reg");
+	ret = dev_read_phandle_with_args(dev, "axistream-connected", NULL, 0, 0,
+					 &axistream_node);
+	if (!ret)
+		plat->dmatx = (struct axidma_reg *)ofnode_get_addr(axistream_node.node);
+	else
+		plat->dmatx = (struct axidma_reg *)dev_read_addr_index(dev, 1);
+
 	if (!plat->dmatx) {
 		printf("%s: axi_dma register space not found\n", __func__);
 		return -EINVAL;
@@ -856,28 +914,32 @@ static int axi_emac_of_to_plat(struct udevice *dev)
 
 	if (plat->mactype == EMAC_1G) {
 		plat->phyaddr = -1;
+		/* PHYAD 0 always redirects to the PCS/PMA PHY */
+		plat->pcsaddr = 0;
 
-		offset = fdtdec_lookup_phandle(gd->fdt_blob, node,
-					       "phy-handle");
-		if (offset > 0) {
+		phynode = dev_get_phy_node(dev);
+		if (ofnode_valid(phynode)) {
 			if (!(IS_ENABLED(CONFIG_DM_ETH_PHY)))
-				plat->phyaddr = fdtdec_get_int(gd->fdt_blob,
-							       offset,
-							       "reg", -1);
-			plat->phy_of_handle = offset;
+				plat->phyaddr = ofnode_read_u32_default(phynode,
+									"reg", -1);
+			plat->phynode = phynode;
 		}
 
-		phy_mode = fdt_getprop(gd->fdt_blob, node, "phy-mode", NULL);
-		if (phy_mode)
-			pdata->phy_interface = phy_get_interface_by_name(phy_mode);
-		if (pdata->phy_interface == -1) {
-			printf("%s: Invalid PHY interface '%s'\n", __func__,
-			       phy_mode);
+		pdata->phy_interface = dev_read_phy_mode(dev);
+		if (pdata->phy_interface == PHY_INTERFACE_MODE_NA)
 			return -EINVAL;
-		}
 
-		plat->eth_hasnobuf = fdtdec_get_bool(gd->fdt_blob, node,
-						     "xlnx,eth-hasnobuf");
+		plat->eth_hasnobuf = dev_read_bool(dev, "xlnx,eth-hasnobuf");
+
+		if (pdata->phy_interface == PHY_INTERFACE_MODE_SGMII ||
+		    pdata->phy_interface == PHY_INTERFACE_MODE_1000BASEX) {
+			ret = dev_read_phandle_with_args(dev, "pcs-handle", NULL, 0, 0,
+							 &pcs_node);
+			if (!ret) {
+				plat->pcsaddr = ofnode_read_u32_default(pcs_node.node,
+									"reg", -1);
+			}
+		}
 	}
 
 	return 0;

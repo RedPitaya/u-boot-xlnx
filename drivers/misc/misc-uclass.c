@@ -5,7 +5,6 @@
 
 #define LOG_CATEGORY UCLASS_MISC
 
-#include <common.h>
 #include <dm.h>
 #include <errno.h>
 #include <misc.h>
@@ -26,7 +25,7 @@ int misc_read(struct udevice *dev, int offset, void *buf, int size)
 	return ops->read(dev, offset, buf, size);
 }
 
-int misc_write(struct udevice *dev, int offset, void *buf, int size)
+int misc_write(struct udevice *dev, int offset, const void *buf, int size)
 {
 	const struct misc_ops *ops = device_get_ops(dev);
 
