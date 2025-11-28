@@ -8,14 +8,15 @@ CONFIG_DISTRO_DEFAULTS=y
 # =============================================================================
 # Memory Configuration
 # =============================================================================
-# Memory test range (112MB)
+# Memory test range
 CONFIG_SYS_MEMTEST_START=0x00000000
-CONFIG_SYS_MEMTEST_END=0x07000000
+CONFIG_SYS_MEMTEST_END=0x00001000
 
 # U-Boot location in memory
-CONFIG_TEXT_BASE=0x04000000
+CONFIG_TEXT_BASE=0x4000000
 CONFIG_SYS_LOAD_ADDR=0x0
 
+CONFIG_REMAKE_ELF=y
 # =============================================================================
 # SPL (Secondary Program Loader) Configuration
 # =============================================================================
@@ -24,9 +25,10 @@ CONFIG_SPL_STACK_R=y
 CONFIG_SPL_HAS_BSS_LINKER_SECTION=y
 
 # SPL memory layout
-CONFIG_SPL_BSS_START_ADDR=0x150000
+CONFIG_SPL_BSS_START_ADDR=0x100000
 CONFIG_SPL_BSS_MAX_SIZE=0x100000
-CONFIG_SPL_STACK_R_ADDR=0x400000
+CONFIG_SPL_STACK_R_ADDR=0x200000
+CONFIG_SPL_STACK=0xfffffe00
 CONFIG_SPL_MAX_SIZE=0x30000
 
 # SPL functionality
@@ -45,6 +47,9 @@ CONFIG_SPL_LOAD_FIT=y
 CONFIG_SPL_LOAD_FIT_ADDRESS=0x10000000
 CONFIG_SPL_PAYLOAD_ARGS_ADDR=0x10000000
 
+CONFIG_SPL_SYS_MALLOC=y
+CONFIG_SPL_SYS_MALLOC_SIZE=0x2000000
+
 # =============================================================================
 # Boot & Image Configuration
 # =============================================================================
@@ -56,7 +61,6 @@ CONFIG_LEGACY_IMAGE_FORMAT=y
 # CONFIG_USE_SPL_FIT_GENERATOR is not set
 
 CONFIG_USE_PREBOOT=y
-CONFIG_SYS_SPI_U_BOOT_OFFS=0x100000
 
 # Supported Device Tree list
 CONFIG_OF_LIST="zynq-zc702 zynq-zc706 zynq-zc770-xm010 zynq-zc770-xm011 zynq-zc770-xm011-x16 zynq-zc770-xm012 zynq-zc770-xm013 zynq-cc108 zynq-microzed zynq-minized zynq-picozed zynq-zed zynq-zturn zynq-zturn-v5 zynq-zybo zynq-zybo-z7 zynq-dlc20-rev1.0"
@@ -219,9 +223,11 @@ CONFIG_EFI_CAPSULE_FIRMWARE_RAW=y
 # =============================================================================
 # Red Pitaya Specific Configuration
 # =============================================================================
-CONFIG_SYS_CONFIG_NAME="red-pitaya"
 CONFIG_CMD_EEPROM=y
 CONFIG_SYS_I2C_EEPROM_ADDR_LEN=2
 CONFIG_SYS_I2C_EEPROM_ADDR=0x50
 CONFIG_SYS_EEPROM_PAGE_WRITE_BITS=5
 CONFIG_SYS_EEPROM_SIZE=8192
+
+CONFIG_USE_DEFAULT_ENV_FILE=y
+CONFIG_DEFAULT_ENV_FILE="board/red_pitaya/red_pitaya.env"
