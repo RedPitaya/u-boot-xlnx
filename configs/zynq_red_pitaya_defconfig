@@ -4,6 +4,7 @@
 CONFIG_ARM=y
 CONFIG_ARCH_ZYNQ=y
 CONFIG_DISTRO_DEFAULTS=y
+CONFIG_REMAKE_ELF=y
 
 # =============================================================================
 # Memory Configuration
